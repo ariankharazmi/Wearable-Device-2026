@@ -1,1 +1,1 @@
-# Project 2026
+# Wearable Project 2026
