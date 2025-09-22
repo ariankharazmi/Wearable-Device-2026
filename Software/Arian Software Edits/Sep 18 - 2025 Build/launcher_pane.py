@@ -10,11 +10,9 @@ import psutil
 from datetime import datetime
 import threading, queue
 import cv2
-import pycoral
 #import tflite-runtime
 #import tflite_runtime.interpreter as tflite
 import numpy as np
-from PyQt6 import QtCore, QtGui, QtWidgets
 
 from pane_base import Pane
 assets_directory = os.path.join(os.getcwd(), "VisionAriesAssets")
