@@ -1,0 +1,17 @@
+display:
+  width: 800
+  height: 480
+  ppi: 220
+  safe_insets: [28, 12, 12, 12]
+  fps: 30
+
+default_pane: launcher  # or 'wifi' after you add it
+enabled_panes: [launcher, wifi, settings]
+
+assets_dir: VA-Assets
+voice_hotword: "hey vision"
+
+features:
+  background_removal: false
+  background_mode: black
+
