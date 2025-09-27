@@ -46,7 +46,7 @@ Wearable Device 2026 can receive mobile phone notifications, serve information (
 None...
 
 ## Wearable Device 2026 Team - UC Senior Design Capstone 2026
-Arian Kharazmi, Taka Kuichi, Leonardo Mangialardo
+Arian Kharazmi, Taka Kiuchi, Leonardo Mangialardo
 
 ## Acknowledgements
 Thank you to the University of Cincinnati for allowing us to work on a hardware-software project. We could not do this without your support.
