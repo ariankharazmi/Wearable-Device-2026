@@ -20,9 +20,8 @@ Wearable Device 2026 serves as tool for improving workplace and occupational out
 ## Phase 1 Hardware
 * Radxa Zero 2 Pro
 * Sony micro-display
-* Touchpad sensor
 * Rotary Encoder Controls for navigation & volume
-* Camera Module (w/ Night Vision)
+* Camera Module
 * LED Status for video & photo capture indication
 
 ## Phase 2 Software
@@ -39,6 +38,7 @@ Wearable Device 2026 serves as tool for improving workplace and occupational out
 * May 2025-July 2025 - Display research & sourcing; Proof-of-Concept is generated
 * Aug 2025-Sep 2025 - Further research is conducted, nearly all components sourced, Capstone course begins
 * Oct 2025 - Core software suite tested on hardware
+* Nov 2025 - Early MVP Prototype developmed, demoed publicly
 
 ## Capabilities
 Wearable Device 2026 can receive mobile phone notifications, serve information (such as alerts, schematics), and capture photos & video. Wearable Device 2026 can also utilize bluetooth features -- like file transfer, connecting to accessories, and more. Handsfree use, navigation, and automation means that users no longer need to reach into your pocket, open up a computer, or check their smartwatch for information. It all delivers via the high-resolution Sony Display that Wearable Device 2026 is equipped with. This will serve occupational uses well, such as factory workers seeing a schematic right in front of them, disaster responders getting critical alerts in their field-of-view, or even researchers using the device for education. Wearable Device 2026 is a purpose-driven device built to serve us, not serve us gimmicks. Wearable Device 2026 aims to be a truly useful device, and the best student-built wearable, all built with off-the-shelf parts. Wearable Device 2026 is being actively developed for University of Cincinnati's Senior Design Capstone 2026 round, and the Microsoft Imagine Cup 2026 International Competition.
