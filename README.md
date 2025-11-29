@@ -6,7 +6,7 @@
 
 
 
-[VA1 - Wearable Device(Prototype Demo](https://www.youtube.com/watch?v=h-RhC1AgUdo)
+[VA1 - Wearable Device(Prototype Demo)](https://www.youtube.com/watch?v=h-RhC1AgUdo)
 
 ![IMG_3142](https://github.com/user-attachments/assets/ac3e3695-5f00-40f0-a54c-c3a77dba9b59)
 ![IMG_3138](https://github.com/user-attachments/assets/8c0b42a6-7a60-47d8-8410-3554da9a5745)
