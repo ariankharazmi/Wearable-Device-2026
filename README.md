@@ -7,10 +7,11 @@
 
 
 [VA1 - Wearable Device(Prototype Demo)](https://www.youtube.com/watch?v=h-RhC1AgUdo)
+<img width="1620" height="913" alt="Screenshot 2025-12-03 at 20 03 50" src="https://github.com/user-attachments/assets/f097ea5d-0ff9-4f10-a358-a406c49e6eba" />
+<img width="1619" height="907" alt="Screenshot 2025-12-03 at 20 04 47" src="https://github.com/user-attachments/assets/efb15fc7-ec84-468d-bb1a-4674fa166e02" />
+<img width="520" height="926" alt="Screenshot 2025-12-03 at 20 05 17" src="https://github.com/user-attachments/assets/5e475204-afac-4f5b-8ffc-0684f61e60e2" />
 
-![IMG_3142](https://github.com/user-attachments/assets/ac3e3695-5f00-40f0-a54c-c3a77dba9b59)
-![IMG_3138](https://github.com/user-attachments/assets/8c0b42a6-7a60-47d8-8410-3554da9a5745)
-![IMG_3100](https://github.com/user-attachments/assets/1c479c74-18da-4de2-9758-4fe66053095e)
+
 
 
 ## Wearable Summary:
