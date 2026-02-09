@@ -2,6 +2,8 @@ import os, time
 from datetime import datetime
 import customtkinter as ctk
 from PIL import Image, ImageTk, ImageDraw, ImageFilter
+from tkinterweb import HtmlFrame
+
 
 # Optional modules – app still runs without them
 try:
@@ -74,6 +76,9 @@ APPS = [
     ("track.png", "Track"),
     ("translate.png", "Translate"),
     ("video.png", "Video"),
+    ("browser.png", "Browser"),
+    ("power.png", "Power"),
+
 ]
 
 LOGO_PATH = os.path.join(ASSETS_DIR, "logonew.png")
@@ -364,6 +369,8 @@ class VAApp(ctk.CTk):
             "bluetooth": self.show_bluetooth,
             "track": self.show_track,
             "gps": self.show_track,
+            "browser": self.show_browser,
+            "power": self.show_power,
         }
 
         # Key bindings – routed through handlers so we can ignore when typing
@@ -687,6 +694,68 @@ class VAApp(ctk.CTk):
             self.camera_label.configure(text="Restarting camera…")
         self._start_camera()
 
+    # -------- Browser ----------
+
+    def show_browser(self):
+        frame = self._show_view(
+            view_id="browser",
+            title="Web Browser",
+            body="Embedded on-device browser.\nTouch, keyboard, and gesture ready.",
+            placeholder_text=False,
+    )
+
+    # --- Top navigation bar ---
+        bar = ctk.CTkFrame(frame)
+        bar.pack(fill="x", padx=16, pady=(10, 6))
+
+        url_var = ctk.StringVar(value="https://www.google.com")
+
+        url_entry = ctk.CTkEntry(
+            bar,
+            textvariable=url_var,
+            placeholder_text="Enter URL or search…",
+            font=("Helvetica", 14),
+    )
+        url_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+    # --- Browser container ---
+        browser_frame = ctk.CTkFrame(frame, corner_radius=18)
+        browser_frame.pack(fill="both", expand=True, padx=16, pady=(6, 16))
+
+        html = HtmlFrame(browser_frame, horizontal_scrollbar="auto")
+        html.pack(fill="both", expand=True)
+
+        def normalize(text: str) -> str:
+            text = text.strip()
+
+            # Treat anything without a protocol as a Google search
+            if not text.startswith(("http://", "https://")):
+                return (
+                    "https://www.google.com/search"
+                    "?hl=en&igu=1&q="
+                    + text.replace(" ", "+")
+        )
+
+            return text
+
+
+
+        def go():
+            url = normalize(url_var.get())
+            html.load_website(url)
+            self.status.append(f"Browser opened {url}")
+
+    # --- Controls ---
+        ctk.CTkButton(bar, text="Go", width=70, command=go).pack(side="left")
+        ctk.CTkButton(bar, text="◀", width=40, command=html.go_back).pack(side="left", padx=4)
+        ctk.CTkButton(bar, text="▶", width=40, command=html.go_forward).pack(side="left")
+        ctk.CTkButton(bar, text="⟳", width=40, command=html.reload).pack(side="left", padx=4)
+
+        html.load_website("https://www.google.com")
+        url_entry.bind("<Return>", lambda e: go())
+        url_entry.focus_set()
+
+
     # -------- Translate --------
 
     def show_translate(self):
@@ -838,6 +907,57 @@ class VAApp(ctk.CTk):
         self.status.append(
             f"Notifications {'on' if self.notifications_enabled else 'off'}"
         )
+    # -------- Power -----------------------------
+
+    def show_power(self):
+        frame = self._show_view(
+            view_id="power",
+            title="Power",
+            body="Manage device power state.",
+            placeholder_text=False,
+    )
+
+        button_frame = ctk.CTkFrame(frame)
+        button_frame.pack(expand=True)
+
+        def power_off():
+            self.status.append("Powering off…")
+            self.after(300, self.destroy)  # graceful shutdown
+
+        def restart():
+            self.status.append("Restarting…")
+            python = os.sys.executable
+            os.execl(python, python, *os.sys.argv)
+
+        def cancel():
+            self.go_home()
+
+        ctk.CTkButton(
+            button_frame,
+            text="🔴 Power Off",
+            fg_color="#8B0000",
+            hover_color="#A00000",
+            height=50,
+            font=("Helvetica", 18, "bold"),
+            command=power_off,
+        ).pack(pady=12, padx=40, fill="x")
+
+        ctk.CTkButton(
+            button_frame,
+            text="🔄 Restart",
+            height=50,
+            font=("Helvetica", 18),
+            command=restart,
+        ).pack(pady=12, padx=40, fill="x")
+
+        ctk.CTkButton(
+            button_frame,
+            text="Cancel",
+            height=40,
+            font=("Helvetica", 16),
+            command=cancel,
+        ).pack(pady=20)
+
 
     # -------- Bluetooth (simulated scan) --------
 
