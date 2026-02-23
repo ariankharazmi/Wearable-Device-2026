@@ -1,0 +1,30 @@
+#!/bin/bash
+#make the file executable: 
+
+# Run the launcher using the specific virtual environment python
+/home/leonardo/Desktop/VA1-Wearable-Device-2026/Software/Leonardo_Software_Edits/venv/Scripts/python.exe AriesLauncher.py
+
+chmod +x /home/leonardo/Desktop/VA1-Wearable-Device-2026/Software/"Taka Demo Launcher"/start_aries.sh
+
+[Unit]
+Description=Aries Glass Launcher
+After=network.target graphical.target
+
+[Service]
+# Enter the username for debain
+User= 'username' 
+WorkingDirectory=/home/leonardo/Desktop/VA1-Wearable-Device-2026/Software/Taka Demo Launcher
+ExecStart=/bin/bash /home/leonardo/Desktop/VA1-Wearable-Device-2026/Software/Taka Demo Launcher/start_aries.sh
+Restart=always
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/leonardo/.Xauthority
+
+[Install]
+WantedBy=graphical.target
+
+
+#then enable the service; 
+
+sudo systemctl daemon-reload
+sudo systemctl enable aries.service
+sudo systemctl start aries.service
