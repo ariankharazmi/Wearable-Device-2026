@@ -1,11 +1,23 @@
-import os, time
+import os
+import sys
+import time
+import threading
+import struct
+import enum
+import logging
+import tkinter as tk
 from datetime import datetime
+
 import customtkinter as ctk
-from PIL import Image, ImageTk, ImageDraw, ImageFilter
-from tkinterweb import HtmlFrame
+from PIL import Image, ImageTk, ImageDraw, ImageFilter, ImageGrab
+try:
+    from tkinterweb import HtmlFrame
+except Exception:
+    HtmlFrame = None
+import platform
 
+# Optional modules
 
-# Optional modules – app still runs without them
 try:
     import psutil
 except Exception:
@@ -21,7 +33,6 @@ try:
 except Exception:
     cv2 = None
 
-# Optional: local LLM + translation
 try:
     import ollama
 except Exception:
@@ -32,12 +43,32 @@ try:
 except Exception:
     GoogleTranslator = None
 
-import platform
+try:
+    import speech_recognition as sr
+except Exception:
+    sr = None
+
+try:
+    import RPi.GPIO as GPIO
+except Exception:
+    GPIO = None
+
+# Logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+
+# Platform
 
 IS_PI = (
     platform.machine().startswith(("armv7l", "armv6l", "aarch64"))
     and "raspberrypi" in platform.platform().lower()
 )
+
+# Config
 
 if IS_PI:
     WIDTH, HEIGHT = 640, 400
@@ -47,63 +78,98 @@ if IS_PI:
     FLOW_LAMBDA = 18.0
     SIZE_STEP_PX = 4
     ALPHA_STEP_8 = 32
+else:
+    WIDTH, HEIGHT = 1280, 720
+    TARGET_FPS = 60
+    BASE_ICON = 132
+    SPACING = 180
+    FLOW_LAMBDA = 26.0
+    SIZE_STEP_PX = 2
+    ALPHA_STEP_8 = 8
 
-# ---------- Configuration -------------
-WIDTH, HEIGHT = 1280, 720
-TARGET_FPS = 144
-
-# Match your folder name with the assets
 ASSETS_DIR = os.path.join(os.getcwd(), "VA-Assets (Colored, Fall 2025)")
+PHOTOS_DIR = os.path.join(os.getcwd(), "AriesPhotos")
+os.makedirs(PHOTOS_DIR, exist_ok=True)
+
+CONFIG_PATH = os.path.join(os.getcwd(), "aries_config.json")
+
+
+def _load_config():
+    """Load saved settings from config file."""
+    try:
+        import json
+        with open(CONFIG_PATH, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_config(data):
+    """Save settings to config file."""
+    try:
+        import json
+        existing = _load_config()
+        existing.update(data)
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(existing, f, indent=2)
+    except Exception:
+        pass
 
 APPS = [
-    ("assistant.png", "Assistant"),
-    ("augreality.png", "AugReality"),
-    ("avatar.png", "Avatar"),
-    ("bluetooth.png", "Bluetooth"),
-    ("camera.png", "Camera"),
-    ("eyetrack.png", "EyeTrack"),
-    ("gesture.png", "Gesture"),
-    ("gps.png", "Track"),
-    ("livestream.png", "LiveStream"),
+    ("assistant.png",      "Assistant"),
+    ("augreality.png",     "AugReality"),
+    ("avatar.png",         "Avatar"),
+    ("bluetooth.png",      "Bluetooth"),
+    ("camera.png",         "Camera"),
+    ("eyetrack.png",       "EyeTrack"),
+    ("gesture.png",        "Gesture"),
+    ("gps.png",            "Track"),
+    ("livestream.png",     "LiveStream"),
     ("localassistant.png", "LocalAI"),
-    ("music.png", "Music"),
-    ("phone.png", "Phone"),
-    ("photo.png", "Photo"),
-    ("plugin.png", "Plugin"),
-    ("settings.png", "Settings"),
-    ("spatialaudio.png", "SpatialAudio"),
-    ("theme.png", "Theme"),
-    ("track.png", "Track"),
-    ("translate.png", "Translate"),
-    ("video.png", "Video"),
-    ("browser.png", "Browser"),
-    ("power.png", "Power"),
-
+    ("music.png",          "Music"),
+    ("phone.png",          "Phone"),
+    ("photo.png",          "Photo"),
+    ("plugin.png",         "Plugin"),
+    ("settings.png",       "Settings"),
+    ("spatialaudio.png",   "SpatialAudio"),
+    ("theme.png",          "Theme"),
+    ("track.png",          "Track"),
+    ("translate.png",      "Translate"),
+    ("video.png",          "Video"),
+    ("browser.png",        "Browser"),
+    ("power.png",          "Power"),
 ]
-
-LOGO_PATH = os.path.join(ASSETS_DIR, "logonew.png")
-MIC_PATH = os.path.join(ASSETS_DIR, "mic.png")
 
 BUILD_STR = "VA-OS1.1 · Pandora Build · Oct 2025"
 
-LABEL_COLOR = "black"
-SPACING = 180
-BASE_ICON = 132
+# HUD palette
+
+C    = "#00E5FF"
+CD   = "#007A8C"
+TXT  = "#E0F7FA"
+TXTD = "#80CBC4"
+BG   = "#000000"
+PNL  = "#0D1B1E"
+PNLE = "#1A3A40"
+AMB  = "#FF6D00"
+RED  = "#D50000"
+
 SCALE_DROP = 0.14
 ALPHA_DROP = 0.22
-FLOW_LAMBDA = 26.0
-SIZE_STEP_PX = 2
-ALPHA_STEP_8 = 8
 
 
-def load_image(path):
+# ═══════════════════════════════════════
+#  Helpers
+# ═══════════════════════════════════════
+
+def _load(path):
     try:
         return Image.open(path).convert("RGBA")
     except Exception:
         return None
 
 
-def circle_crop_rgba(img: Image.Image, size: int) -> Image.Image:
+def _circle(img, size):
     img = img.resize((size, size), Image.LANCZOS)
     mask = Image.new("L", (size, size), 0)
     ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
@@ -112,24 +178,19 @@ def circle_crop_rgba(img: Image.Image, size: int) -> Image.Image:
     return out
 
 
-def make_soft_glow(radius: int, alpha: int = 140) -> Image.Image:
+def _glow(radius, alpha=140, color=(0, 229, 255)):
     w = h = radius * 2
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    layers = [
-        (0.55, alpha),
-        (1.15, int(alpha * 0.70)),
-        (2.00, int(alpha * 0.40)),
-        (3.00, int(alpha * 0.18)),
-    ]
-    for scale, a in layers:
-        r = radius * scale
-        d.ellipse((w / 2 - r, h / 2 - r, w / 2 + r, h / 2 + r), fill=(255, 255, 255, a))
-    img = img.filter(ImageFilter.GaussianBlur(int(radius * 0.30)))
-    return img
+    for sc, a in [(0.55, alpha), (1.15, int(alpha * .7)),
+                  (2.0, int(alpha * .4)), (3.0, int(alpha * .18))]:
+        r = radius * sc
+        cx, cy = w / 2, h / 2
+        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(*color, a))
+    return img.filter(ImageFilter.GaussianBlur(int(radius * .3)))
 
 
-def safe_batt():
+def _batt():
     if psutil and hasattr(psutil, "sensors_battery"):
         try:
             b = psutil.sensors_battery()
@@ -140,16 +201,16 @@ def safe_batt():
     return "–%"
 
 
-def safe_cpu():
+def _cpu():
     if psutil:
         try:
-            return f"{psutil.cpu_percent():.0f}%"
+            return f"{psutil.cpu_percent(interval=0):.0f}%"
         except Exception:
             pass
     return "–%"
 
 
-def safe_ram():
+def _ram():
     if psutil:
         try:
             return f"{psutil.virtual_memory().percent:.0f}%"
@@ -158,951 +219,1782 @@ def safe_ram():
     return "–%"
 
 
-def safe_time_str():
+def _time_str():
     now = datetime.now()
     try:
-        return now.strftime("%-I:%M %p")  # Unix
+        return now.strftime("%-I:%M %p")
     except ValueError:
-        return now.strftime("%#I:%M %p")  # Windows
+        return now.strftime("%#I:%M %p")
 
 
-# ---------- UI building blocks ----------
-
+# ═══════════════════════════════════════
+#  StatusBar
+# ═══════════════════════════════════════
 
 class StatusBar:
-    def __init__(self, canvas: ctk.CTkCanvas):
+    def __init__(self, canvas):
         self.cv = canvas
-        self.console = []
-        self.weather = "…"
-        self.text_id = None
-        self._last_update = 0.0
+        self._lines = []
+        self._tid = None
+        self._last = 0.0
+        for dx, dy in [(0, 14), (14, 0)]:
+            canvas.create_line(16, 12, 16 + dx, 12 + dy, fill=CD)
 
-    def append(self, line: str):
-        self.console.append(line)
-        self.console = self.console[-3:]
+    def append(self, msg):
+        self._lines = (self._lines + [msg])[-3:]
 
     def tick(self):
-        nowt = time.perf_counter()
-        if nowt - self._last_update < 0.25:
+        now = time.perf_counter()
+        if now - self._last < 0.5:
             return
-        self._last_update = nowt
-
-        now_str = safe_time_str()
-        lines = "\n".join(self.console)
-        txt = (
-            f"{now_str} · {safe_batt()} · {self.weather} · "
-            f"CPU {safe_cpu()} · RAM {safe_ram()}\n{BUILD_STR}"
-        )
-        if lines:
-            txt += "\n" + lines
-        if self.text_id is None:
-            self.text_id = self.cv.create_text(
-                16, 84, anchor="nw", fill="white", font=("Helvetica", 12), text=txt
-            )
+        self._last = now
+        body = (f"{_time_str()}  ·  BAT {_batt()}  ·  CPU {_cpu()}"
+                f"  ·  RAM {_ram()}\n{BUILD_STR}")
+        if self._lines:
+            body += "\n" + "\n".join(self._lines)
+        if self._tid is None:
+            self._tid = self.cv.create_text(
+                32, 30, anchor="nw", fill=TXTD,
+                font=("Consolas", 11), text=body)
         else:
-            self.cv.itemconfigure(self.text_id, text=txt)
+            self.cv.itemconfigure(self._tid, text=body)
 
+
+# ═══════════════════════════════════════
+#  Notification Toast
+# ═══════════════════════════════════════
+
+class Toast:
+    def __init__(self, canvas):
+        self.cv = canvas
+        self._bg = canvas.create_rectangle(0, 0, 0, 0, fill=PNL, outline=CD, width=1,
+                                            state="hidden")
+        self._txt = canvas.create_text(0, 0, text="", fill=TXT, anchor="n",
+                                        font=("Consolas", 12), state="hidden")
+        self._after = None
+
+    def show(self, msg, duration=3000):
+        w = min(len(msg) * 9 + 40, WIDTH - 100)
+        x = WIDTH // 2
+        self.cv.coords(self._bg, x - w // 2, 90, x + w // 2, 122)
+        self.cv.coords(self._txt, x, 96)
+        self.cv.itemconfigure(self._txt, text=msg)
+        self.cv.itemconfigure(self._bg, state="normal")
+        self.cv.itemconfigure(self._txt, state="normal")
+        self.cv.tag_raise(self._bg)
+        self.cv.tag_raise(self._txt)
+        if self._after:
+            self.cv.after_cancel(self._after)
+        self._after = self.cv.after(duration, self.hide)
+
+    def hide(self):
+        self.cv.itemconfigure(self._bg, state="hidden")
+        self.cv.itemconfigure(self._txt, state="hidden")
+
+
+# ═══════════════════════════════════════
+#  VoiceController — demo-ready state machine
+# ═══════════════════════════════════════
+#
+#  States:  IDLE → LISTENING → PROCESSING → IDLE
+#
+#  - No recording unless explicitly activated (push-to-talk via activate())
+#  - Single worker thread per session, guarded by state lock
+#  - Automatic stop after command recognized
+#  - Debounce: ignores rapid re-activation within cooldown window
+#  - Duplicate command filter within dedup window
+#  - Clean shutdown via shutdown() — no stuck threads
+#  - All UI updates dispatched through a callback, never touches tk directly
+#
+
+class VoiceState(enum.Enum):
+    IDLE       = "IDLE"
+    LISTENING  = "LISTENING"
+    PROCESSING = "PROCESSING"
+
+
+class VoiceController:
+    """Modular push-to-talk voice controller with state machine."""
+
+    COOLDOWN_SEC      = 1.5   # Min gap between activations
+    DEDUP_SEC         = 2.0   # Ignore duplicate commands within this window
+    LISTEN_TIMEOUT    = 6     # Seconds to wait for speech start
+    PHRASE_LIMIT      = 10    # Max phrase recording length
+    ENERGY_THRESHOLD  = 100   # Fixed low threshold (no dynamic adjustment)
+    PAUSE_THRESHOLD   = 1.0   # Silence duration to end phrase
+
+    def __init__(self, on_result=None, on_state=None, on_error=None,
+                 mic_index=None):
+        self.log = logging.getLogger("Voice")
+
+        # Callbacks (all called from worker thread — caller must dispatch to UI)
+        self._on_result = on_result   # fn(text: str)
+        self._on_state  = on_state    # fn(state: VoiceState)
+        self._on_error  = on_error    # fn(msg: str)
+
+        # State
+        self._state = VoiceState.IDLE
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._worker_thread = None
+        self._last_activate = 0.0
+        self._last_cmd = ""
+        self._last_cmd_time = 0.0
+        self._mic_index = mic_index
+        self._shutdown = False
+
+        # Recognizer setup
+        self._recognizer = None
+        if sr:
+            self._recognizer = sr.Recognizer()
+            self._recognizer.energy_threshold = self.ENERGY_THRESHOLD
+            self._recognizer.dynamic_energy_threshold = False
+            self._recognizer.pause_threshold = self.PAUSE_THRESHOLD
+            self.log.info("Recognizer ready (threshold=%d)", self.ENERGY_THRESHOLD)
+        else:
+            self.log.warning("speech_recognition not available")
+
+    @property
+    def state(self):
+        return self._state
+
+    @property
+    def available(self):
+        return self._recognizer is not None
+
+    @property
+    def mic_index(self):
+        return self._mic_index
+
+    @mic_index.setter
+    def mic_index(self, val):
+        self._mic_index = val
+        self.log.info("Mic index set to %s", val)
+
+    def _set_state(self, new_state):
+        old = self._state
+        self._state = new_state
+        self.log.info("State: %s → %s", old.value, new_state.value)
+        if self._on_state:
+            self._on_state(new_state)
+
+    def activate(self):
+        """Push-to-talk trigger. Call from UI thread."""
+        if self._shutdown:
+            return False
+
+        if not self._recognizer:
+            if self._on_error:
+                self._on_error("Need: pip install SpeechRecognition pyaudio")
+            return False
+
+        # Debounce — ignore rapid re-activation
+        now = time.perf_counter()
+        if now - self._last_activate < self.COOLDOWN_SEC:
+            self.log.debug("Activation debounced (%.1fs since last)",
+                           now - self._last_activate)
+            return False
+
+        # Only activate from IDLE
+        with self._lock:
+            if self._state != VoiceState.IDLE:
+                self.log.debug("Activation ignored — state is %s", self._state.value)
+                return False
+            self._set_state(VoiceState.LISTENING)
+
+        self._last_activate = now
+        self._stop_event.clear()
+
+        # Start worker thread
+        self._worker_thread = threading.Thread(
+            target=self._worker, name="VoiceWorker", daemon=True)
+        self._worker_thread.start()
+        return True
+
+    def cancel(self):
+        """Cancel current listening session."""
+        self._stop_event.set()
+        self.log.info("Cancel requested")
+
+    def shutdown(self):
+        """Clean shutdown — stops any active session, prevents new ones."""
+        self._shutdown = True
+        self._stop_event.set()
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=3)
+            if self._worker_thread.is_alive():
+                self.log.warning("Worker thread did not exit cleanly")
+        with self._lock:
+            self._set_state(VoiceState.IDLE)
+        self.log.info("Shutdown complete")
+
+    def _worker(self):
+        """Background thread — records audio, runs STT, returns result."""
+        text = ""
+        try:
+            # Check for cancellation before opening mic
+            if self._stop_event.is_set():
+                return
+
+            # Open microphone
+            if self._mic_index is not None:
+                mic = sr.Microphone(device_index=self._mic_index)
+            else:
+                mic = sr.Microphone()
+
+            with mic as source:
+                # Check again after mic open
+                if self._stop_event.is_set():
+                    return
+
+                self.log.info("Listening (timeout=%ds, limit=%ds)",
+                              self.LISTEN_TIMEOUT, self.PHRASE_LIMIT)
+                audio = self._recognizer.listen(
+                    source,
+                    timeout=self.LISTEN_TIMEOUT,
+                    phrase_time_limit=self.PHRASE_LIMIT,
+                )
+
+            # Transition to PROCESSING
+            with self._lock:
+                if self._stop_event.is_set():
+                    return
+                self._set_state(VoiceState.PROCESSING)
+
+            # Run Google STT
+            self.log.info("Sending audio to Google STT …")
+            text = self._recognizer.recognize_google(audio)
+            self.log.info("Recognized: '%s'", text)
+
+        except sr.WaitTimeoutError:
+            self.log.info("Timeout — no speech detected")
+            if self._on_error:
+                self._on_error("No speech — try again")
+
+        except sr.UnknownValueError:
+            self.log.info("Could not understand audio")
+            if self._on_error:
+                self._on_error("Couldn't understand — try again")
+
+        except sr.RequestError as e:
+            self.log.error("Google STT request failed: %s", e)
+            if self._on_error:
+                self._on_error(f"STT error: {e}")
+
+        except OSError as e:
+            self.log.error("Microphone OS error: %s", e)
+            if self._on_error:
+                self._on_error(f"Mic error: {e}")
+
+        except Exception as e:
+            self.log.error("Unexpected error: %s", e, exc_info=True)
+            if self._on_error:
+                self._on_error(f"Error: {e}")
+
+        finally:
+            # Always return to IDLE
+            with self._lock:
+                self._set_state(VoiceState.IDLE)
+
+            # Deliver result if we got one (with dedup check)
+            if text and not self._stop_event.is_set():
+                now = time.perf_counter()
+                normalized = text.lower().strip()
+
+                # Dedup — ignore identical command within window
+                if (normalized == self._last_cmd
+                        and now - self._last_cmd_time < self.DEDUP_SEC):
+                    self.log.info("Duplicate command filtered: '%s'", normalized)
+                    return
+
+                self._last_cmd = normalized
+                self._last_cmd_time = now
+
+                if self._on_result:
+                    self._on_result(text)
+
+    @staticmethod
+    def list_microphones():
+        """Return list of (index, name) for available mics."""
+        if not sr:
+            return []
+        try:
+            names = sr.Microphone.list_microphone_names()
+            return list(enumerate(names))
+        except Exception:
+            return []
+
+    @staticmethod
+    def auto_detect_mic():
+        """Find the best microphone index, or None for system default."""
+        for i, name in VoiceController.list_microphones():
+            low = name.lower()
+            if any(k in low for k in ("usb", "headset", "webcam",
+                                       "microphone", "mic", "input")):
+                return i
+        return None
+
+
+# ═══════════════════════════════════════
+#  RotaryController — GPIO click wheel input
+# ═══════════════════════════════════════
+#
+#  Hardware: Rotary encoder with push button (CLK, DT, SW)
+#  - Clockwise rotation → on_rotate(+1)
+#  - Counter-clockwise → on_rotate(-1)
+#  - Short press (< 1s) → on_click()
+#  - Long press (≥ 1s) → on_long_press()
+#  - All callbacks fire from GPIO interrupt thread
+#  - Time-based debounce on both rotation and button
+#  - Graceful fallback when GPIO unavailable (desktop dev)
+#
+
+class RotaryController:
+    """GPIO rotary encoder with push button, debounced."""
+
+    # Default pin assignments (BCM numbering)
+    DEFAULT_CLK = 17
+    DEFAULT_DT  = 27
+    DEFAULT_SW  = 22
+
+    # Timing
+    ROTATE_DEBOUNCE_MS  = 5     # Debounce for rotation edges
+    BUTTON_DEBOUNCE_MS  = 200   # Debounce for button press
+    LONG_PRESS_SEC      = 1.0   # Hold time for long press
+
+    def __init__(self, on_rotate=None, on_click=None, on_long_press=None,
+                 clk_pin=None, dt_pin=None, sw_pin=None):
+        self.log = logging.getLogger("Rotary")
+
+        self._on_rotate     = on_rotate      # fn(direction: int)  +1 or -1
+        self._on_click      = on_click        # fn()
+        self._on_long_press = on_long_press   # fn()
+
+        self._clk = clk_pin or self.DEFAULT_CLK
+        self._dt  = dt_pin  or self.DEFAULT_DT
+        self._sw  = sw_pin  or self.DEFAULT_SW
+
+        self._last_rotate_time  = 0.0
+        self._button_down_time  = 0.0
+        self._button_handled    = False
+        self._active = False
+
+        if not GPIO:
+            self.log.info("RPi.GPIO not available — rotary disabled (desktop mode)")
+            return
+
+        try:
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setwarnings(False)
+
+            GPIO.setup(self._clk, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            GPIO.setup(self._dt,  GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            GPIO.setup(self._sw,  GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+            self._clk_last = GPIO.input(self._clk)
+
+            # Edge detection for rotation
+            GPIO.add_event_detect(
+                self._clk, GPIO.BOTH,
+                callback=self._rotation_callback,
+                bouncetime=self.ROTATE_DEBOUNCE_MS,
+            )
+
+            # Edge detection for button
+            GPIO.add_event_detect(
+                self._sw, GPIO.BOTH,
+                callback=self._button_callback,
+                bouncetime=self.BUTTON_DEBOUNCE_MS,
+            )
+
+            self._active = True
+            self.log.info("Initialized (CLK=%d, DT=%d, SW=%d)",
+                          self._clk, self._dt, self._sw)
+
+        except Exception as e:
+            self.log.error("GPIO setup failed: %s", e)
+            self._active = False
+
+    @property
+    def available(self):
+        return self._active
+
+    def _rotation_callback(self, channel):
+        """Called on CLK edge — reads DT to determine direction."""
+        now = time.perf_counter()
+        if now - self._last_rotate_time < self.ROTATE_DEBOUNCE_MS / 1000.0:
+            return
+        self._last_rotate_time = now
+
+        clk_state = GPIO.input(self._clk)
+        dt_state  = GPIO.input(self._dt)
+
+        if clk_state != self._clk_last:
+            direction = 1 if dt_state != clk_state else -1
+            self.log.debug("Rotate: %+d", direction)
+            if self._on_rotate:
+                self._on_rotate(direction)
+
+        self._clk_last = clk_state
+
+    def _button_callback(self, channel):
+        """Called on button edge — tracks press/release for long press."""
+        pressed = GPIO.input(self._sw) == GPIO.LOW
+
+        if pressed:
+            self._button_down_time = time.perf_counter()
+            self._button_handled = False
+        else:
+            if self._button_handled:
+                return
+            self._button_handled = True
+
+            hold = time.perf_counter() - self._button_down_time
+
+            if hold >= self.LONG_PRESS_SEC:
+                self.log.info("Long press (%.1fs)", hold)
+                if self._on_long_press:
+                    self._on_long_press()
+            else:
+                self.log.info("Click (%.2fs)", hold)
+                if self._on_click:
+                    self._on_click()
+
+    def shutdown(self):
+        """Clean up GPIO resources."""
+        if self._active and GPIO:
+            try:
+                GPIO.remove_event_detect(self._clk)
+                GPIO.remove_event_detect(self._sw)
+                GPIO.cleanup([self._clk, self._dt, self._sw])
+                self.log.info("GPIO cleaned up")
+            except Exception as e:
+                self.log.warning("GPIO cleanup error: %s", e)
+        self._active = False
+
+
+# ═══════════════════════════════════════
+#  CoverFlow
+# ═══════════════════════════════════════
 
 class CoverFlow:
-    def __init__(self, canvas: ctk.CTkCanvas, apps, base_icon=BASE_ICON, spacing=SPACING):
+    def __init__(self, canvas, apps):
         self.cv = canvas
-        self.base_icon = base_icon
-        self.spacing = spacing
         self.sel = 0
         self.sel_anim = 0.0
-
-        self.icons = []
-        self._img_refs = [None] * 5
-        self.label_id = None
+        self._refs = [None] * 5
 
         self.apps = []
         for fn, label in apps:
-            img = load_image(os.path.join(ASSETS_DIR, fn)) or Image.new(
-                "RGBA", (base_icon, base_icon), (200, 200, 200, 255)
-            )
-            self.apps.append(
-                {
-                    "id": os.path.splitext(fn)[0],
-                    "label": label,
-                    "img": img,
-                    "cache": {},
-                }
-            )
+            img = _load(os.path.join(ASSETS_DIR, fn))
+            if img is None:
+                img = Image.new("RGBA", (BASE_ICON, BASE_ICON), (200, 200, 200, 255))
+            self.apps.append({"id": os.path.splitext(fn)[0],
+                              "label": label, "img": img, "cache": {}})
 
-        glow_img = make_soft_glow(int(base_icon * 1.2), 140)
-        self._glow_tk = ImageTk.PhotoImage(glow_img)
-        self.glow_id = self.cv.create_image(0, 0, image=self._glow_tk, anchor="nw")
+        g = _glow(int(BASE_ICON * 1.2), 140)
+        self._glow_tk = ImageTk.PhotoImage(g)
+        self._glow_id = canvas.create_image(0, 0, image=self._glow_tk, anchor="nw")
+        self._icons = [canvas.create_image(0, 0, image=None, anchor="nw")
+                       for _ in range(5)]
+        self._label = canvas.create_text(
+            0, 0, text="", fill=C, font=("Consolas", 16, "bold"))
 
-        for _ in range(5):
-            self.icons.append(self.cv.create_image(0, 0, image=None, anchor="nw"))
-        self.label_id = self.cv.create_text(
-            0, 0, text="", fill=LABEL_COLOR, font=("Helvetica", 16, "bold")
-        )
-
-    def _get_tkimg(self, app, size_px: int, alpha: float):
-        size_q = max(14, int(round(size_px / SIZE_STEP_PX) * SIZE_STEP_PX))
-        a255 = int(max(0, min(255, round(alpha * 255 / ALPHA_STEP_8) * ALPHA_STEP_8)))
-        key = (size_q, a255)
-        cache = app["cache"]
-        if key in cache:
-            return cache[key]
-
-        circ = circle_crop_rgba(app["img"], size_q)
-        if a255 < 255:
-            am = circ.split()[-1].point(lambda p, a=a255: int(p * a / 255))
+    def _tkimg(self, app, sz, alpha):
+        sq = max(14, round(sz / SIZE_STEP_PX) * SIZE_STEP_PX)
+        a8 = int(max(0, min(255, round(alpha * 255 / ALPHA_STEP_8) * ALPHA_STEP_8)))
+        key = (sq, a8)
+        if key in app["cache"]:
+            return app["cache"][key]
+        circ = _circle(app["img"], sq)
+        if a8 < 255:
+            am = circ.split()[-1].point(lambda p, _a=a8: int(p * _a / 255))
             circ.putalpha(am)
-        tkimg = ImageTk.PhotoImage(circ)
-        cache[key] = tkimg
-        return tkimg
+        tk = ImageTk.PhotoImage(circ)
+        app["cache"][key] = tk
+        return tk
 
     def step(self, dt):
         n = len(self.apps)
-        if n == 0:
+        if not n:
             return
         d = self.sel - self.sel_anim
-        if d > n / 2:
-            d -= n
-        if d < -n / 2:
-            d += n
+        if d > n / 2:   d -= n
+        if d < -n / 2:  d += n
         dt = max(1 / 480, dt)
-        alpha = 1.0 - pow(2.718281828, -FLOW_LAMBDA * dt)
-        self.sel_anim += d * alpha
+        a = 1.0 - pow(2.718281828, -FLOW_LAMBDA * dt)
+        self.sel_anim += d * a
         if abs(d) < 1e-4:
             self.sel_anim = round(self.sel_anim)
-        self._redraw_icons()
+        self._redraw()
 
-    def update_selection(self, delta):
+    def move(self, delta):
         if self.apps:
             self.sel = (self.sel + delta) % len(self.apps)
 
-    def current_app(self):
-        if not self.apps:
-            return None
-        return self.apps[self.sel % len(self.apps)]
+    def current(self):
+        return self.apps[self.sel % len(self.apps)] if self.apps else None
 
-    def _redraw_icons(self):
-        midx, midy = WIDTH // 2, HEIGHT // 2 - 10
-        x0 = midx - 2 * self.spacing
+    def _redraw(self):
+        mx, my = WIDTH // 2, HEIGHT // 2 - 10
+        x0 = mx - 2 * SPACING
         frac = self.sel_anim - round(self.sel_anim)
-        order = (0, 4, 1, 3, 2)
-
         positions = []
-        for slot, i in enumerate(order):
+        for slot, i in enumerate((0, 4, 1, 3, 2)):
             idx = int(round(self.sel_anim) - 2 + i) % len(self.apps)
             app = self.apps[idx]
             dist = abs(i - 2 + frac)
             scale = max(0.70, 1.0 - SCALE_DROP * dist)
             alpha = max(0.46, 1.0 - ALPHA_DROP * dist)
-
-            size = int(self.base_icon * scale)
-            tkimg = self._get_tkimg(app, size, alpha)
-
-            cx, cy = x0 + i * self.spacing, midy
-            self.cv.itemconfigure(self.icons[slot], image=tkimg)
-            self.cv.coords(
-                self.icons[slot],
-                int(cx - tkimg.width() / 2),
-                int(cy - tkimg.height() / 2),
-            )
-            self._img_refs[slot] = tkimg
-
+            sz = int(BASE_ICON * scale)
+            tk = self._tkimg(app, sz, alpha)
+            cx, cy = x0 + i * SPACING, my
+            self.cv.itemconfigure(self._icons[slot], image=tk)
+            self.cv.coords(self._icons[slot],
+                           int(cx - tk.width() / 2), int(cy - tk.height() / 2))
+            self._refs[slot] = tk
             if i == 2:
-                gx = int(cx - self._glow_tk.width() / 2)
-                gy = int(cy - self._glow_tk.height() / 2 + self.base_icon * 0.03)
-                self.cv.coords(self.glow_id, gx, gy)
-
-            positions.append((cx, cy, tkimg.width(), app["label"]))
-
-        for cx, cy, size_w, label in positions:
-            if abs(cx - midx) < 2:
-                self.cv.itemconfigure(self.label_id, text=label, fill=LABEL_COLOR)
-                self.cv.coords(self.label_id, cx, cy + size_w / 2 + 28)
+                self.cv.coords(self._glow_id,
+                               int(cx - self._glow_tk.width() / 2),
+                               int(cy - self._glow_tk.height() / 2 + BASE_ICON * .03))
+            positions.append((cx, cy, tk.width(), app["label"]))
+        for cx, cy, w, label in positions:
+            if abs(cx - mx) < 2:
+                self.cv.itemconfigure(self._label, text=label, fill=C)
+                self.cv.coords(self._label, cx, cy + w / 2 + 28)
                 break
 
 
-# ---------- Main Aries launcher with MVP functionality ----------
-
+# ═══════════════════════════════════════
+#  Main App
+# ═══════════════════════════════════════
 
 class VAApp(ctk.CTk):
+
     def __init__(self):
         super().__init__()
+        self.log = logging.getLogger("App")
         self.geometry(f"{WIDTH}x{HEIGHT}")
         self.title("Aries Launcher")
         self.resizable(False, False)
+        self.configure(bg=BG)
 
-        self.cv = ctk.CTkCanvas(self, width=WIDTH, height=HEIGHT, highlightthickness=0)
+        try:
+            self.attributes("-transparentcolor", "#000000")
+        except Exception:
+            pass
+        try:
+            self.attributes("-alpha", 0.92)
+        except Exception:
+            pass
+
+        # Home canvas
+        self.cv = ctk.CTkCanvas(self, width=WIDTH, height=HEIGHT,
+                                highlightthickness=0, bg=BG)
         self.cv.pack(fill="both", expand=True)
-
+        self._draw_chrome()
         self.status = StatusBar(self.cv)
+        self.toast = Toast(self.cv)
         self.cflow = CoverFlow(self.cv, APPS)
 
-        self.view_frame = ctk.CTkFrame(self, fg_color="black")
-        self.view_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
-        self.view_frame.lower()
+        self._mic_id = self.cv.create_text(
+            WIDTH - 30, HEIGHT - 30, text="🎙", anchor="se",
+            fill=TXTD, font=("Consolas", 18))
+        self.cv.create_text(
+            WIDTH // 2, HEIGHT - 22, anchor="s", fill=CD,
+            font=("Consolas", 10),
+            text='[V] Voice  ·  [S] Screenshot  ·  [T] Timer  ·  [Enter] Open  ·  [Esc] Back')
 
+        # Overlay frame — raw tk.Frame to avoid ghost rectangle
+        self._vf = None
+        self._vf_visible = False
+
+        # State
         self.current_view = "home"
-
-        # Assistant state
-        self.assistant_history_widget = None
         self.assistant_chat_history = []
-        # Use your installed Ollama model here
         self.assistant_model_name = "gemma3:4b"
 
-        # Camera state
-        self.camera_label = None
-        self.camera_cap = None
-        self._camera_after_id = None
-        self.camera_running = False
+        self._cam_label = None
+        self._cam_cap = None
+        self._cam_after = None
+        self._cam_running = False
+        self._cam_last_frame = None
 
-        # Settings state
         self.dark_mode = True
         self.bluetooth_enabled = False
         self.notifications_enabled = True
 
-        # Map app IDs to handler methods
-        self.app_handlers = {
+        # Timer
+        self._timer_running = False
+        self._timer_start = 0
+        self._timer_id = self.cv.create_text(
+            WIDTH - 30, 30, text="", anchor="ne", fill=C,
+            font=("Consolas", 14, "bold"))
+
+        # ── Voice controller ──
+        cfg = _load_config()
+        saved_mic = cfg.get("mic_index", None)
+        if saved_mic is not None:
+            mic_idx = int(saved_mic)
+        else:
+            mic_idx = VoiceController.auto_detect_mic()
+
+        self.voice = VoiceController(
+            on_result=self._voice_on_result,
+            on_state=self._voice_on_state,
+            on_error=self._voice_on_error,
+            mic_index=mic_idx,
+        )
+        if saved_mic is not None:
+            self.log.info("Loaded saved mic index: %d", mic_idx)
+
+        # Browser refs
+        self._html = None
+        self._b_url = None
+
+        # Handlers
+        self._handlers = {
             "assistant": self.show_assistant,
-            "camera": self.show_camera,
+            "camera":    self.show_camera,
+            "photo":     self.show_photos,
             "translate": self.show_translate,
-            "settings": self.show_settings,
-            "music": self.show_music,
+            "settings":  self.show_settings,
+            "music":     self.show_music,
             "bluetooth": self.show_bluetooth,
-            "track": self.show_track,
-            "gps": self.show_track,
-            "browser": self.show_browser,
-            "power": self.show_power,
+            "track":     self.show_track,
+            "gps":       self.show_track,
+            "browser":   self.show_browser,
+            "power":     self.show_power,
         }
 
-        # Key bindings – routed through handlers so we can ignore when typing
-        self.bind("<Left>", self._on_left_key)
-        self.bind("<Right>", self._on_right_key)
-        self.bind("<Return>", self._on_return_key)
-        self.bind("<space>", self._on_space_key)
-        self.bind("<Escape>", self._on_escape_key)
+        # ── Rotary encoder (GPIO) ──
+        self.rotary = RotaryController(
+            on_rotate=self._rotary_rotate,
+            on_click=self._rotary_click,
+            on_long_press=self._rotary_long,
+        )
 
-        self.bind_all("<MouseWheel>", self._wheel)
-        self.bind_all("<Button-4>", lambda e: self.nav(+1))
-        self.bind_all("<Button-5>", lambda e: self.nav(-1))
+        # Keys — V, S, T work globally
+        self.bind("<Left>",   self._k_left)
+        self.bind("<Right>",  self._k_right)
+        self.bind("<Return>", self._k_enter)
+        self.bind("<Escape>", self._k_esc)
+        self.bind("<v>",      self._k_v)
+        self.bind("<V>",      self._k_v)
+        self.bind("<s>",      self._k_s)
+        self.bind("<S>",      self._k_s)
+        self.bind("<t>",      self._k_t)
+        self.bind("<T>",      self._k_t)
+        self.bind_all("<MouseWheel>", self._k_wheel)
+        self.bind_all("<Button-4>", lambda e: self._nav(+1))
+        self.bind_all("<Button-5>", lambda e: self._nav(-1))
+
+        # Clean exit
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._last_time = time.perf_counter()
         self._tick()
 
-    # -------- key handlers (fully fixed typing rules) --------
+    def _on_close(self):
+        """Clean shutdown — release all resources."""
+        self.log.info("Shutting down …")
+        self.voice.shutdown()
+        self.rotary.shutdown()
+        self._stop_camera()
+        self.destroy()
 
-    def _is_text_widget(self, widget=None):
-        """Return True if ANY text widget is currently focused."""
-        focused = self.focus_get()
-        return isinstance(focused, (ctk.CTkEntry, ctk.CTkTextbox))
+    # ═══════════════════════════════════════
+    #  Voice callbacks (called from worker thread — must dispatch to UI)
+    # ═══════════════════════════════════════
 
-    def _on_left_key(self, event):
-        if self.current_view == "home" and not self._is_text_widget():
-            self.nav(-1)
+    def _voice_on_result(self, text):
+        """Called from voice worker thread with recognized text."""
+        self.after(0, lambda: self._voice_handle_result(text))
 
-    def _on_right_key(self, event):
-        if self.current_view == "home" and not self._is_text_widget():
-            self.nav(+1)
+    def _voice_on_state(self, state):
+        """Called from voice worker thread on state transition."""
+        self.after(0, lambda: self._voice_handle_state(state))
 
-    def _on_return_key(self, event):
-        if self.current_view == "home" and not self._is_text_widget():
-            self.open_current()
+    def _voice_on_error(self, msg):
+        """Called from voice worker thread on error."""
+        self.after(0, lambda: self.toast.show(msg))
 
-    def _on_space_key(self, event):
-        if self.current_view == "home" and not self._is_text_widget():
-            self.open_current()
+    def _voice_handle_result(self, text):
+        """UI-thread handler for recognized speech."""
+        self.toast.show(f'"{text}"', 2000)
+        self.status.append(f'Heard: "{text}"')
+        self._voice_route(text.lower().strip())
 
-    def _on_escape_key(self, event):
-    # Escape ALWAYS returns to home view
+    def _voice_handle_state(self, state):
+        """UI-thread handler for voice state changes."""
+        if state == VoiceState.LISTENING:
+            self.cv.itemconfigure(self._mic_id, fill=AMB)
+            self.toast.show("🎙 Speak now …")
+        elif state == VoiceState.PROCESSING:
+            self.cv.itemconfigure(self._mic_id, fill=C)
+            self.toast.show("Processing …", 1500)
+        elif state == VoiceState.IDLE:
+            self.cv.itemconfigure(self._mic_id, fill=TXTD)
+
+    # ═══════════════════════════════════════
+    #  Rotary callbacks (called from GPIO thread)
+    # ═══════════════════════════════════════
+
+    def _rotary_rotate(self, direction):
+        """GPIO thread → UI thread: rotate coverflow."""
+        self.after(0, lambda: self._nav(direction))
+
+    def _rotary_click(self):
+        """GPIO thread → UI thread: select/open."""
+        self.after(0, self._open_sel)
+
+    def _rotary_long(self):
+        """GPIO thread → UI thread: go home."""
+        self.after(0, self._go_home)
+
+    # ── HUD chrome ──
+
+    def _draw_chrome(self):
+        c, p, b = CD, 8, 40
+        for x1, y1, x2, y2, x3, y3 in [
+            (p, p, p+b, p, p, p+b),
+            (WIDTH-p, p, WIDTH-p-b, p, WIDTH-p, p+b),
+            (p, HEIGHT-p, p+b, HEIGHT-p, p, HEIGHT-p-b),
+            (WIDTH-p, HEIGHT-p, WIDTH-p-b, HEIGHT-p, WIDTH-p, HEIGHT-p-b)]:
+            self.cv.create_line(x1, y1, x2, y2, fill=c)
+            self.cv.create_line(x1, y1, x3, y3, fill=c)
+        self.cv.create_line(32, 82, 400, 82, fill=PNLE)
+
+    # ── Key handlers ──
+
+    def _typing(self):
+        """Check if a LIVE text input widget has focus.
+        After _clear_vf destroys settings/browser widgets, tkinter's
+        focus tracker can still point to the dead widget. A destroyed
+        tk.Entry still passes isinstance() checks, so we must verify
+        the widget is alive first via winfo_exists()."""
+        f = self.focus_get()
+        if f is None:
+            return False
+        # Verify widget hasn't been destroyed
+        try:
+            if not f.winfo_exists():
+                return False
+        except Exception:
+            return False
+        # Direct CTk widget check
+        if isinstance(f, (ctk.CTkEntry, ctk.CTkTextbox)):
+            return True
+        # Inner tk widget check (what focus_get actually returns)
+        if isinstance(f, (tk.Entry, tk.Text)):
+            return True
+        # Fallback: check widget class name string
+        try:
+            cls = f.winfo_class()
+            if cls in ("Entry", "Text", "TEntry", "TText", "Spinbox"):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _k_left(self, e):
+        if self.current_view == "home" and not self._typing():
+            self._nav(-1)
+
+    def _k_right(self, e):
+        if self.current_view == "home" and not self._typing():
+            self._nav(+1)
+
+    def _k_enter(self, e):
+        if self.current_view == "home" and not self._typing():
+            self._open_sel()
+
+    def _k_esc(self, e):
         if self.current_view != "home":
-            self.go_home()
+            self._go_home()
 
-
-    # -------- navigation --------
-
-    def nav(self, d: int):
+    def _k_wheel(self, e):
         if self.current_view == "home":
-            self.cflow.update_selection(d)
+            self._nav(1 if e.delta > 0 else -1)
 
-    def open_current(self):
-        app = self.cflow.current_app()
+    def _k_v(self, e):
+        # Push-to-talk — works from any screen unless typing
+        if not self._typing():
+            self.voice.activate()
+
+    def _k_s(self, e):
+        if not self._typing():
+            self._screenshot()
+
+    def _k_t(self, e):
+        if not self._typing():
+            self._toggle_timer()
+
+    # ═══════════════════════════════════════
+    #  Timer / Stopwatch
+    # ═══════════════════════════════════════
+
+    def _toggle_timer(self):
+        if self._timer_running:
+            self._timer_running = False
+            elapsed = time.perf_counter() - self._timer_start
+            m, s = divmod(int(elapsed), 60)
+            self.cv.itemconfigure(self._timer_id, text=f"⏱ {m:02d}:{s:02d} STOPPED")
+            self.toast.show(f"Timer stopped: {m:02d}:{s:02d}")
+        else:
+            self._timer_running = True
+            self._timer_start = time.perf_counter()
+            self.toast.show("Timer started — press [T] to stop")
+
+    # ═══════════════════════════════════════
+    #  Screenshot
+    # ═══════════════════════════════════════
+
+    def _screenshot(self):
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(PHOTOS_DIR, f"screenshot_{ts}.png")
+        try:
+            x, y = self.winfo_rootx(), self.winfo_rooty()
+            img = ImageGrab.grab(bbox=(x, y, x + WIDTH, y + HEIGHT))
+            img.save(path)
+            self.toast.show("📸 Screenshot saved")
+            self.status.append(f"Screenshot: {os.path.basename(path)}")
+        except Exception as e:
+            self.status.append(f"Screenshot failed: {e}")
+
+    # ═══════════════════════════════════════
+    #  Voice routing
+    # ═══════════════════════════════════════
+
+    def _voice_route(self, cmd):
+        # Strip common prefixes so "open camera" → "camera"
+        for prefix in ("open ", "go to ", "launch ", "start ", "show "):
+            if cmd.startswith(prefix):
+                cmd = cmd[len(prefix):]
+                break
+
+        words = set(cmd.split())
+
+        # Explicit search — ONLY when user says "search ..."
+        for prefix in ("search for ", "look up ", "google ", "search "):
+            if cmd.startswith(prefix):
+                q = cmd[len(prefix):].strip()
+                if q:
+                    self._browser_search(q)
+                return
+
+        # Keyword routes — app commands
+        routes = [
+            ({"take", "photo"},    lambda: self._voice_capture()),
+            ({"take", "picture"},  lambda: self._voice_capture()),
+            ({"capture"},          lambda: self._voice_capture()),
+            ({"screenshot"},       self._screenshot),
+            ({"timer"},            self._toggle_timer),
+            ({"stopwatch"},        self._toggle_timer),
+            ({"camera"},           self.show_camera),
+            ({"photos"},           self.show_photos),
+            ({"photo"},            self.show_photos),
+            ({"gallery"},          self.show_photos),
+            ({"browser"},          self.show_browser),
+            ({"web"},              self.show_browser),
+            ({"internet"},         self.show_browser),
+            ({"assistant"},        self.show_assistant),
+            ({"aries"},            self.show_assistant),
+            ({"music"},            self.show_music),
+            ({"settings"},         self.show_settings),
+            ({"translate"},        self.show_translate),
+            ({"translation"},      self.show_translate),
+            ({"translator"},       self.show_translate),
+            ({"bluetooth"},        self.show_bluetooth),
+            ({"location"},         self.show_track),
+            ({"track"},            self.show_track),
+            ({"gps"},              self.show_track),
+            ({"home"},             self._go_home),
+            ({"back"},             self._go_home),
+            ({"power", "off"},     self.show_power),
+            ({"shut", "down"},     self.show_power),
+            ({"shutdown"},         self.show_power),
+            ({"power"},            self.show_power),
+            ({"video"},            lambda: self._generic("Video")),
+            ({"avatar"},           lambda: self._generic("Avatar")),
+            ({"plugin"},           lambda: self._generic("Plugin")),
+            ({"theme"},            lambda: self._generic("Theme")),
+            ({"livestream"},       lambda: self._generic("LiveStream")),
+            ({"stream"},           lambda: self._generic("LiveStream")),
+        ]
+
+        for kws, action in routes:
+            if kws.issubset(words):
+                action()
+                return
+
+        # No match — tell user instead of auto-searching
+        self.toast.show(f"Unknown command: \"{cmd}\"")
+        self.status.append(f"No match: \"{cmd}\"")
+
+    def _voice_capture(self):
+        if self.current_view == "camera":
+            self._capture_photo()
+        else:
+            self.show_camera()
+            self.after(700, self._capture_photo)
+
+    # ═══════════════════════════════════════
+    #  Navigation
+    # ═══════════════════════════════════════
+
+    def _nav(self, d):
+        if self.current_view == "home":
+            self.cflow.move(d)
+
+    def _open_sel(self):
+        app = self.cflow.current()
         if not app:
             return
         self.status.append(f"Opened {app['label']}")
-        handler = self.app_handlers.get(app["id"])
-        if handler:
-            handler()
+        h = self._handlers.get(app["id"])
+        if h:
+            h()
         else:
-            self.show_generic_app(app["label"])
+            self._generic(app["label"])
 
-    def go_home(self):
+    def _go_home(self):
         self.current_view = "home"
         self._stop_camera()
-        self.view_frame.lower()
-        self.cv.lift()
-        self.status.append("Returned to home")
+        if self._vf_visible and self._vf:
+            self._vf.place_forget()
+            self._vf_visible = False
+        # Reset focus to canvas — prevents dead widget focus after leaving apps
+        self.cv.focus_set()
+        self.status.append("Home")
 
-    def _wheel(self, e):
-        self.nav(1 if e.delta > 0 else -1)
+    # ═══════════════════════════════════════
+    #  View frame — lazy raw tk.Frame
+    # ═══════════════════════════════════════
 
-    # -------- view helpers --------
+    def _ensure_vf(self):
+        if self._vf is None:
+            self._vf = tk.Frame(self, bg=BG, highlightthickness=0)
 
-    def _clear_view_frame(self):
-        # stop camera when leaving a view
+    def _clear_vf(self):
         self._stop_camera()
-        for child in self.view_frame.winfo_children():
-            child.destroy()
+        if self._vf:
+            for w in self._vf.winfo_children():
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
 
-    def _show_view(self, view_id: str, title: str, body: str, placeholder_text=True):
-        self.current_view = view_id
-        self._clear_view_frame()
-        self.view_frame.lift()
+    def _view(self, vid, title, body="", placeholder=False):
+        self.current_view = vid
+        self._ensure_vf()
+        self._clear_vf()
 
-        title_label = ctk.CTkLabel(
-            self.view_frame, text=title, font=("Helvetica", 28, "bold")
-        )
-        title_label.pack(pady=30)
+        if not self._vf_visible:
+            self._vf.place(x=0, y=0, width=WIDTH, height=HEIGHT)
+            self._vf.tkraise()
+            self._vf_visible = True
 
-        body_label = ctk.CTkLabel(
-            self.view_frame,
-            text=body,
-            font=("Helvetica", 18),
-            wraplength=WIDTH - 120,
-            justify="center",
-        )
-        body_label.pack(pady=10)
+        # Top bar
+        top = ctk.CTkFrame(self._vf, fg_color="transparent", height=50)
+        top.pack(fill="x")
+        top.pack_propagate(False)
+        ctk.CTkLabel(top, text=f"◂  {title}", font=("Consolas", 20, "bold"),
+                      text_color=C).pack(side="left", padx=20, pady=10)
+        ctk.CTkLabel(top, text="[ESC] back  ·  [V] voice  ·  [S] screenshot",
+                      font=("Consolas", 10),
+                      text_color=TXTD).pack(side="right", padx=20, pady=10)
 
-        content_frame = ctk.CTkFrame(self.view_frame, corner_radius=18)
-        content_frame.pack(pady=20, padx=40, fill="both", expand=True)
+        ctk.CTkFrame(self._vf, fg_color=CD, height=1).pack(fill="x", padx=20)
 
-        if placeholder_text:
-            content_label = ctk.CTkLabel(
-                content_frame,
-                text=f"[{title} UI placeholder]\nHook your real functionality here.",
-                font=("Helvetica", 16),
-                justify="center",
-            )
-            content_label.place(relx=0.5, rely=0.5, anchor="center")
+        if body:
+            ctk.CTkLabel(self._vf, text=body, font=("Consolas", 12),
+                          text_color=TXTD, wraplength=WIDTH - 100,
+                          justify="center").pack(pady=(6, 2))
 
-        hint_label = ctk.CTkLabel(
-            self.view_frame,
-            text="Press ESC to return to Home",
-            font=("Helvetica", 14),
-        )
-        hint_label.pack(pady=16)
+        panel = ctk.CTkFrame(self._vf, corner_radius=10, fg_color=PNL,
+                              border_color=PNLE, border_width=1)
+        panel.pack(pady=(4, 6), padx=28, fill="both", expand=True)
 
-        return content_frame
+        if placeholder:
+            ctk.CTkLabel(panel, text=f"[{title} — not yet implemented]",
+                          font=("Consolas", 13), text_color=TXTD,
+                          justify="center").place(relx=.5, rely=.5, anchor="center")
+        return panel
 
-    def show_generic_app(self, label: str):
-        self._show_view(
-            view_id=f"app:{label}",
-            title=label,
-            body=f"{label} screen is not fully implemented yet,\n"
-            f"but this is where its UI will live.",
-        )
+    def _generic(self, label):
+        self._view(f"app:{label}", label,
+                   f"{label} is not fully implemented yet.", placeholder=True)
 
-    # -------- Assistant --------
+    # ═══════════════════════════════════════
+    #  Assistant
+    # ═══════════════════════════════════════
 
     def show_assistant(self):
-        frame = self._show_view(
-            view_id="assistant",
-            title="Assistant",
-            body="Voice + text assistant (local MVP demo).\n"
-            "Type a message below – powered by a local Ollama model when available.",
-            placeholder_text=False,
-        )
+        p = self._view("assistant", "Assistant",
+                        "Local AI assistant powered by Ollama")
 
-        history = ctk.CTkTextbox(frame, font=("Consolas", 14), wrap="word")
-        history.pack(side="top", fill="both", expand=True, padx=10, pady=(10, 5))
-        history.insert("end", "Assistant: Hi! How can I help you today?\n")
-        if ollama is not None:
-            history.insert("end", f"(Model: {self.assistant_model_name} via Ollama)\n\n")
+        hist = ctk.CTkTextbox(p, font=("Consolas", 13), wrap="word",
+                               fg_color="#0A1214", text_color=TXT)
+        hist.pack(side="top", fill="both", expand=True, padx=8, pady=(8, 4))
+        hist.insert("end", "Aries ▸ Hi! How can I help?\n")
+        if ollama:
+            hist.insert("end", f"  (model: {self.assistant_model_name})\n\n")
         else:
-            history.insert("end", "(Local math/demo fallback – Ollama not available)\n\n")
-        history.configure(state="disabled")
+            hist.insert("end", "  (local fallback)\n\n")
+        hist.configure(state="disabled")
 
-        input_frame = ctk.CTkFrame(frame)
-        input_frame.pack(side="bottom", fill="x", padx=10, pady=10)
+        bar = ctk.CTkFrame(p, fg_color="transparent")
+        bar.pack(side="bottom", fill="x", padx=8, pady=8)
 
-        entry = ctk.CTkEntry(input_frame, placeholder_text="Type your message...")
-        entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ent = ctk.CTkEntry(bar, placeholder_text="Type a message …",
+                            font=("Consolas", 13), fg_color=PNL,
+                            text_color=TXT, border_color=CD)
+        ent.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        send_btn = ctk.CTkButton(
-            input_frame, text="Send", command=lambda: self._assistant_send(entry, history)
-        )
-        send_btn.pack(side="right")
+        def send(_=None):
+            msg = ent.get().strip()
+            if not msg:
+                return
+            ent.delete(0, "end")
+            hist.configure(state="normal")
+            hist.insert("end", f"You ▸ {msg}\n")
+            hist.configure(state="disabled")
+            hist.see("end")
+            self.update_idletasks()
+            threading.Thread(target=lambda: self._assistant_reply(msg, hist),
+                             daemon=True).start()
 
-        self.assistant_history_widget = history
-        entry.bind("<Return>", lambda e: self._assistant_send(entry, history))
-        entry.focus_set()
+        self._btn(bar, "Send", send, True, 72)
+        ent.bind("<Return>", send)
+        ent.focus_set()
 
-    def _assistant_send(self, entry: ctk.CTkEntry, history: ctk.CTkTextbox):
-        msg = entry.get().strip()
-        if not msg:
-            return
-        entry.delete(0, "end")
-
-        history.configure(state="normal")
-        history.insert("end", f"You: {msg}\n")
-
-        # Prefer local LLM via Ollama if available, otherwise fallback
-        if ollama is not None:
-            reply = self._assistant_model_reply(msg)
-        else:
-            reply = self._assistant_local_reply(msg)
-
-        history.insert("end", f"Assistant: {reply}\n\n")
-        history.configure(state="disabled")
-        history.see("end")
-
-    def _assistant_model_reply(self, msg: str) -> str:
-        """Use local Ollama model for replies."""
-        if not ollama:
-            return self._assistant_local_reply(msg)
-
-        try:
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an AI assistant running locally on a pair of smart glasses. "
-                        "Give short, clear answers that are easy to read on a small display."
-                    ),
-                }
-            ]
-            messages.extend(self.assistant_chat_history)
-            messages.append({"role": "user", "content": msg})
-
-            resp = ollama.chat(
-                model=self.assistant_model_name,
-                messages=messages,
-            )
-            answer = resp.get("message", {}).get("content", "").strip() or "[No response]"
-
-            self.assistant_chat_history.append({"role": "user", "content": msg})
-            self.assistant_chat_history.append({"role": "assistant", "content": answer})
-
-            return answer
-        except Exception as e:
-            return f"(Local LLM error: {e})"
-
-    def _assistant_local_reply(self, msg: str) -> str:
-        # simple math handling
-        import re, math
-
-        expr = re.sub(r"[^0-9\+\-\*\/\.\(\) ]", "", msg)
-        if expr and any(ch.isdigit() for ch in expr):
+    def _assistant_reply(self, msg, hist):
+        reply = self._ollama_reply(msg) if ollama else self._local_reply(msg)
+        def _update():
             try:
-                result = eval(expr, {"__builtins__": {}}, {"math": math})
-                return f"The result is {result} (computed locally)."
+                if not hist.winfo_exists():
+                    return
+                hist.configure(state="normal")
+                hist.insert("end", f"Aries ▸ {reply}\n\n")
+                hist.configure(state="disabled")
+                hist.see("end")
             except Exception:
                 pass
+        self.after(0, _update)
 
-        if "hello" in msg.lower():
-            return "Hello! I’m running fully on-device in this demo."
-        if "where" in msg.lower():
-            return "I don’t have full GPS yet, but you can open the Track app to see an approximate location."
-        if "time" in msg.lower():
-            return f"It’s currently {safe_time_str()}."
-        return (
-            "I received your request and processed it locally as part of the MVP.\n"
-            "(Cloud models can be connected later for richer responses.)"
-        )
+    def _ollama_reply(self, msg):
+        if not ollama:
+            return self._local_reply(msg)
+        try:
+            msgs = [{"role": "system", "content":
+                     "You are Aries, an AI on AR smart glasses. Be concise."}]
+            msgs.extend(self.assistant_chat_history)
+            msgs.append({"role": "user", "content": msg})
+            resp = ollama.chat(model=self.assistant_model_name, messages=msgs)
+            ans = resp.get("message", {}).get("content", "").strip() or "[No response]"
+            self.assistant_chat_history.append({"role": "user", "content": msg})
+            self.assistant_chat_history.append({"role": "assistant", "content": ans})
+            return ans
+        except Exception as e:
+            return f"(LLM error: {e})"
 
-    # -------- Camera --------
+    def _local_reply(self, msg):
+        import re, math
+        expr = re.sub(r"[^0-9+\\-*/.()\s]", "", msg)
+        if expr and any(c.isdigit() for c in expr):
+            try:
+                return f"{eval(expr, {'__builtins__': {}}, {'math': math})}"
+            except Exception:
+                pass
+        low = msg.lower()
+        if "hello" in low or "hi" in low:
+            return "Hello! I'm Aries, running on-device."
+        if "time" in low:
+            return f"It's {_time_str()}."
+        return "Processed locally (MVP)."
+
+    # ═══════════════════════════════════════
+    #  Camera
+    # ═══════════════════════════════════════
 
     def show_camera(self):
-        frame = self._show_view(
-            view_id="camera",
-            title="Camera",
-            body="Live camera preview.\n"
-            "If a camera is connected and OpenCV is installed, you’ll see it here.",
-            placeholder_text=False,
-        )
+        p = self._view("camera", "Camera",
+                        "Live preview · Capture saves to gallery")
 
-        self.camera_label = ctk.CTkLabel(
-            frame, text="Initializing camera...", font=("Helvetica", 16)
-        )
-        self.camera_label.place(relx=0.5, rely=0.5, anchor="center")
+        self._cam_label = ctk.CTkLabel(p, text="Initializing …",
+                                        font=("Consolas", 13), text_color=TXTD)
+        self._cam_label.pack(fill="both", expand=True)
 
-        btn_frame = ctk.CTkFrame(self.view_frame)
-        btn_frame.pack(pady=(0, 10))
-        ctk.CTkButton(
-            btn_frame, text="Restart Camera", command=self._restart_camera
-        ).pack(side="left", padx=8)
-        ctk.CTkButton(
-            btn_frame, text="Stop Camera", command=self._stop_camera
-        ).pack(side="left", padx=8)
+        ctk.CTkLabel(p, text="● LIVE", font=("Consolas", 11, "bold"),
+                      text_color=AMB).place(relx=.97, rely=.03, anchor="ne")
+
+        count = len([f for f in os.listdir(PHOTOS_DIR)
+                     if f.lower().endswith((".png", ".jpg", ".jpeg"))])
+        ctk.CTkLabel(p, text=f"📷 {count}", font=("Consolas", 10),
+                      text_color=TXTD).place(relx=.03, rely=.03, anchor="nw")
+
+        bb = ctk.CTkFrame(self._vf, fg_color="transparent")
+        bb.pack(pady=(0, 8))
+        self._btn(bb, "📷 Capture", self._capture_photo, True)
+        self._btn(bb, "Restart", self._restart_cam)
+        self._btn(bb, "Stop", self._stop_camera)
 
         self._start_camera()
 
     def _start_camera(self):
         if cv2 is None:
-            if self.camera_label:
-                self.camera_label.configure(
-                    text="OpenCV (cv2) not installed.\nRun: pip install opencv-python"
-                )
+            self._cam_msg("cv2 not installed")
             return
         try:
-            self.camera_cap = cv2.VideoCapture(0)
+            self._cam_cap = cv2.VideoCapture(0)
         except Exception:
-            self.camera_cap = None
-        if not self.camera_cap or not self.camera_cap.isOpened():
-            if self.camera_label:
-                self.camera_label.configure(
-                    text="No camera connected or access denied.\n"
-                    "On your teammate’s Mac, this should show the live feed."
-                )
+            self._cam_cap = None
+        if not self._cam_cap or not self._cam_cap.isOpened():
+            self._cam_msg("No camera detected.")
             return
+        self._cam_running = True
+        self._cam_tick()
 
-        self.camera_running = True
-        self._update_camera_frame()
+    def _cam_tick(self):
+        if not self._cam_running or not self._cam_cap:
+            return
+        try:
+            ret, frame = self._cam_cap.read()
+            if ret:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(frame).resize((800, 450))
+                self._cam_last_frame = img.copy()
+                tk_img = ImageTk.PhotoImage(img)
+                self._cam_tk = tk_img
+                if self._cam_label:
+                    self._cam_label.configure(image=tk_img, text="")
+        except Exception:
+            pass
+        self._cam_after = self.after(33, self._cam_tick)
 
-    def _update_camera_frame(self):
-        if not self.camera_running or not self.camera_cap:
+    def _capture_photo(self):
+        if self._cam_last_frame is None:
+            self.toast.show("No frame to capture")
             return
-        ret, frame = self.camera_cap.read()
-        if not ret:
-            return
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = Image.fromarray(frame)
-        img = img.resize((800, 450))
-        imgtk = ImageTk.PhotoImage(img)
-        self._cam_imgtk = imgtk  # keep reference
-        if self.camera_label:
-            self.camera_label.configure(image=imgtk, text="")
-        self._camera_after_id = self.after(33, self._update_camera_frame)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(PHOTOS_DIR, f"aries_{ts}.png")
+        try:
+            self._cam_last_frame.save(path)
+            self.toast.show("📷 Photo saved!")
+            self.status.append(f"Saved {os.path.basename(path)}")
+        except Exception as e:
+            self.toast.show(f"Save failed: {e}")
 
     def _stop_camera(self):
-        self.camera_running = False
-        if self._camera_after_id:
+        self._cam_running = False
+        if self._cam_after:
             try:
-                self.after_cancel(self._camera_after_id)
+                self.after_cancel(self._cam_after)
             except Exception:
                 pass
-            self._camera_after_id = None
-        if self.camera_cap:
+            self._cam_after = None
+        if self._cam_cap:
             try:
-                self.camera_cap.release()
+                self._cam_cap.release()
             except Exception:
                 pass
-            self.camera_cap = None
-        if self.camera_label:
-            self.camera_label.configure(image=None, text="Camera stopped.")
+            self._cam_cap = None
+        self._cam_msg("Camera stopped.")
 
-    def _restart_camera(self):
+    def _restart_cam(self):
         self._stop_camera()
-        if self.camera_label:
-            self.camera_label.configure(text="Restarting camera…")
         self._start_camera()
 
-    # -------- Browser ----------
+    def _cam_msg(self, msg):
+        if self._cam_label:
+            try:
+                self._cam_label.configure(image=None, text=msg)
+            except Exception:
+                pass
+
+    # ═══════════════════════════════════════
+    #  Photos
+    # ═══════════════════════════════════════
+
+    def show_photos(self):
+        p = self._view("photos", "Photos", "Camera captures & screenshots")
+
+        files = sorted(
+            [f for f in os.listdir(PHOTOS_DIR)
+             if f.lower().endswith((".png", ".jpg", ".jpeg"))],
+            reverse=True)
+
+        if not files:
+            ctk.CTkLabel(p, text="No photos yet.\nUse Camera or press [S].",
+                          font=("Consolas", 13), text_color=TXTD,
+                          justify="center").place(relx=.5, rely=.5, anchor="center")
+            return
+
+        self._pv_label = ctk.CTkLabel(p, text="", fg_color="#0A1214",
+                                       corner_radius=6, width=520, height=280)
+        self._pv_label.pack(pady=(8, 4))
+        self._pv_refs = []
+
+        self._pv_name = ctk.CTkLabel(p, text="", font=("Consolas", 10),
+                                      text_color=TXTD)
+        self._pv_name.pack(pady=(0, 2))
+
+        scroll = ctk.CTkScrollableFrame(p, fg_color="transparent",
+                                         scrollbar_button_color=CD, height=130)
+        scroll.pack(fill="x", padx=8, pady=(0, 4))
+
+        row = ctk.CTkFrame(scroll, fg_color="transparent")
+        row.pack(fill="x")
+
+        for i, fname in enumerate(files):
+            if i > 0 and i % 6 == 0:
+                row = ctk.CTkFrame(scroll, fg_color="transparent")
+                row.pack(fill="x", pady=3)
+            fpath = os.path.join(PHOTOS_DIR, fname)
+            try:
+                thumb = Image.open(fpath).convert("RGBA").resize((130, 82), Image.LANCZOS)
+                tk_img = ImageTk.PhotoImage(thumb)
+                self._pv_refs.append(tk_img)
+                ctk.CTkButton(row, image=tk_img, text="", width=138, height=90,
+                               corner_radius=4, fg_color=PNLE, hover_color=CD,
+                               command=lambda fp=fpath, fn=fname: self._pv_show(fp, fn)
+                               ).pack(side="left", padx=3)
+            except Exception:
+                pass
+
+        # Bottom bar
+        bb = ctk.CTkFrame(self._vf, fg_color="transparent")
+        bb.pack(pady=(0, 6))
+        self._pv_current = None
+
+        def delete():
+            if self._pv_current and os.path.exists(self._pv_current):
+                os.remove(self._pv_current)
+                self.toast.show("Photo deleted")
+                self.show_photos()
+
+        ctk.CTkButton(bb, text="🗑 Delete", width=100, corner_radius=6,
+                       fg_color=RED, hover_color="#FF1744",
+                       text_color="white", font=("Consolas", 12),
+                       command=delete).pack(side="left", padx=4)
+
+        ctk.CTkLabel(bb, text=f"{len(files)} photo(s)",
+                      font=("Consolas", 11), text_color=TXTD
+                      ).pack(side="left", padx=12)
+
+        if files:
+            self._pv_show(os.path.join(PHOTOS_DIR, files[0]), files[0])
+
+    def _pv_show(self, path, name=""):
+        self._pv_current = path
+        try:
+            img = Image.open(path).convert("RGBA")
+            img.thumbnail((520, 280), Image.LANCZOS)
+            tk_img = ImageTk.PhotoImage(img)
+            self._pv_tk = tk_img
+            self._pv_label.configure(image=tk_img, text="")
+            if name:
+                self._pv_name.configure(text=name)
+        except Exception as e:
+            self._pv_label.configure(image=None, text=f"Error: {e}")
+
+    # ═══════════════════════════════════════
+    #  Browser
+    # ═══════════════════════════════════════
+    #
+    #  Uses DuckDuckGo HTML-lite for search — it renders cleanly
+    #  in tkinterweb's basic HTML engine (Google/Bing need JavaScript).
+    #  Typing a URL goes directly; typing words searches DDG.
+    #
+
+    SEARCH_ENGINES = {
+        "DuckDuckGo": "https://html.duckduckgo.com/html/?q=",
+        "Google":     "https://www.google.com/search?q=",
+        "Wikipedia":  "https://en.wikipedia.org/w/index.php?search=",
+    }
 
     def show_browser(self):
-        frame = self._show_view(
-            view_id="browser",
-            title="Web Browser",
-            body="Embedded on-device browser.\nTouch, keyboard, and gesture ready.",
-            placeholder_text=False,
-    )
+        p = self._view("browser", "Browser")
 
-    # --- Top navigation bar ---
-        bar = ctk.CTkFrame(frame)
-        bar.pack(fill="x", padx=16, pady=(10, 6))
+        if HtmlFrame is None:
+            ctk.CTkLabel(p, text="tkinterweb not installed.\npip install tkinterweb",
+                          font=("Consolas", 13), text_color=TXTD,
+                          justify="center").place(relx=.5, rely=.5, anchor="center")
+            return
 
-        url_var = ctk.StringVar(value="https://www.google.com")
+        nav = ctk.CTkFrame(p, fg_color="transparent")
+        nav.pack(fill="x", padx=10, pady=(8, 4))
 
-        url_entry = ctk.CTkEntry(
-            bar,
-            textvariable=url_var,
-            placeholder_text="Enter URL or search…",
-            font=("Helvetica", 14),
-    )
-        url_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        # Search engine selector
+        self._b_engine = ctk.StringVar(value="DuckDuckGo")
+        ctk.CTkOptionMenu(nav, values=list(self.SEARCH_ENGINES.keys()),
+                           variable=self._b_engine, width=120,
+                           fg_color=PNL, button_color=CD,
+                           button_hover_color=C, text_color=TXT,
+                           font=("Consolas", 11)).pack(side="left", padx=(0, 6))
 
-    # --- Browser container ---
-        browser_frame = ctk.CTkFrame(frame, corner_radius=18)
-        browser_frame.pack(fill="both", expand=True, padx=16, pady=(6, 16))
+        self._b_url = ctk.StringVar(value="")
+        ent = ctk.CTkEntry(nav, textvariable=self._b_url,
+                            placeholder_text="Search anything or enter URL …",
+                            font=("Consolas", 13), fg_color=PNL,
+                            text_color=TXT, border_color=CD)
+        ent.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        html = HtmlFrame(browser_frame, horizontal_scrollbar="auto")
-        html.pack(fill="both", expand=True)
+        web = ctk.CTkFrame(p, corner_radius=6, fg_color="#0A1214")
+        web.pack(fill="both", expand=True, padx=10, pady=(2, 10))
 
-        def normalize(text: str) -> str:
-            text = text.strip()
+        self._html = HtmlFrame(web, horizontal_scrollbar="auto")
+        self._html.pack(fill="both", expand=True)
 
-            # Treat anything without a protocol as a Google search
-            if not text.startswith(("http://", "https://")):
-                return (
-                    "https://www.google.com/search"
-                    "?hl=en&igu=1&q="
-                    + text.replace(" ", "+")
-        )
+        def go(_=None):
+            raw = self._b_url.get().strip()
+            if not raw:
+                return
+            url = self._to_url(raw)
+            self._b_url.set(raw)
+            self._html.load_website(url)
+            self.status.append(f"Browser → {raw[:50]}")
 
+        self._btn(nav, "Go", go, True, 56)
+        self._btn(nav, "◀", lambda: self._safe(self._html.go_back), w=38)
+        self._btn(nav, "▶", lambda: self._safe(self._html.go_forward), w=38)
+        self._btn(nav, "⟳", lambda: self._safe(self._html.reload), w=38)
+        self._btn(nav, "🎙", lambda: self.voice.activate(), w=38)
+
+        # Start on DuckDuckGo homepage (lightweight, renders well)
+        self._html.load_website("https://html.duckduckgo.com/")
+        ent.bind("<Return>", go)
+        ent.focus_set()
+
+    def _to_url(self, text):
+        """Smart URL/search detection."""
+        text = text.strip()
+        # Already a full URL
+        if text.startswith(("http://", "https://")):
             return text
+        # Looks like a domain name (has dot, no spaces)
+        if "." in text and " " not in text:
+            return "https://" + text
+        # Everything else — search with selected engine
+        engine = getattr(self, '_b_engine', None)
+        name = engine.get() if engine else "DuckDuckGo"
+        base = self.SEARCH_ENGINES.get(name, self.SEARCH_ENGINES["DuckDuckGo"])
+        return base + text.replace(" ", "+")
 
+    def _browser_search(self, query):
+        if not query:
+            return
+        if HtmlFrame is None:
+            self.toast.show("Browser not available (tkinterweb)")
+            return
+        self.show_browser()
+        url = self._to_url(query)
+        self._b_url.set(query)
+        self.after(400, lambda: self._html.load_website(url))
+        self.status.append(f"Searching: {query[:50]}")
 
-
-        def go():
-            url = normalize(url_var.get())
-            html.load_website(url)
-            self.status.append(f"Browser opened {url}")
-
-    # --- Controls ---
-        ctk.CTkButton(bar, text="Go", width=70, command=go).pack(side="left")
-        ctk.CTkButton(bar, text="◀", width=40, command=html.go_back).pack(side="left", padx=4)
-        ctk.CTkButton(bar, text="▶", width=40, command=html.go_forward).pack(side="left")
-        ctk.CTkButton(bar, text="⟳", width=40, command=html.reload).pack(side="left", padx=4)
-
-        html.load_website("https://www.google.com")
-        url_entry.bind("<Return>", lambda e: go())
-        url_entry.focus_set()
-
-
-    # -------- Translate --------
+    # ═══════════════════════════════════════
+    #  Translate
+    # ═══════════════════════════════════════
 
     def show_translate(self):
-        frame = self._show_view(
-            view_id="translate",
-            title="Translate",
-            body="Simple text translation MVP.\n"
-            "Uses deep-translator (GoogleTranslator) when available.",
-            placeholder_text=False,
-        )
+        p = self._view("translate", "Translate",
+                        "Text translation via deep-translator")
 
-        top_frame = ctk.CTkFrame(frame)
-        top_frame.pack(fill="x", pady=(10, 5), padx=10)
+        top = ctk.CTkFrame(p, fg_color="transparent")
+        top.pack(fill="x", padx=10, pady=(8, 4))
+        ctk.CTkLabel(top, text="Target:", font=("Consolas", 12),
+                      text_color=TXT).pack(side="left", padx=(0, 6))
 
-        ctk.CTkLabel(top_frame, text="Target language:").pack(side="left", padx=(0, 8))
+        langs = ["Japanese", "Spanish", "French", "Korean", "German", "Chinese"]
+        lv = ctk.StringVar(value="Japanese")
+        ctk.CTkOptionMenu(top, values=langs, variable=lv, fg_color=PNL,
+                           button_color=CD, button_hover_color=C,
+                           text_color=TXT).pack(side="left")
 
-        languages = ["Japanese", "Spanish", "French", "Korean", "German", "Chinese"]
-        lang_var = ctk.StringVar(value="Japanese")
-        lang_menu = ctk.CTkOptionMenu(top_frame, values=languages, variable=lang_var)
-        lang_menu.pack(side="left")
+        src = ctk.CTkTextbox(p, height=120, font=("Consolas", 13),
+                              fg_color="#0A1214", text_color=TXT)
+        src.pack(fill="x", padx=10, pady=(8, 4))
+        src.insert("end", "Hello, how are you?")
+        src.focus_set()
 
-        src_box = ctk.CTkTextbox(frame, height=160, font=("Helvetica", 14))
-        src_box.pack(fill="x", padx=10, pady=(10, 5))
-        src_box.insert("end", "Hello, how are you?")
-        src_box.focus_set()
+        tgt = ctk.CTkTextbox(p, height=120, font=("Consolas", 13),
+                              fg_color="#0A1214", text_color=C)
+        tgt.pack(fill="x", padx=10, pady=(4, 8))
+        tgt.insert("end", "Translation appears here …")
+        tgt.configure(state="disabled")
 
-        tgt_box = ctk.CTkTextbox(frame, height=160, font=("Helvetica", 14))
-        tgt_box.pack(fill="x", padx=10, pady=(5, 10))
-        tgt_box.insert("end", "Translation will appear here…")
-        tgt_box.configure(state="disabled")
+        def go():
+            text = src.get("1.0", "end").strip()
+            res = self._translate(text, lv.get())
+            tgt.configure(state="normal")
+            tgt.delete("1.0", "end")
+            tgt.insert("end", res)
+            tgt.configure(state="disabled")
 
-        def do_translate():
-            text = src_box.get("1.0", "end").strip()
-            lang = lang_var.get()
-            result = self._local_translate(text, lang)
-            tgt_box.configure(state="normal")
-            tgt_box.delete("1.0", "end")
-            tgt_box.insert("end", result)
-            tgt_box.configure(state="disabled")
+        self._btn_c(p, "Translate", go, True)
 
-        ctk.CTkButton(frame, text="Translate", command=do_translate).pack(
-            pady=(0, 10)
-        )
-
-    def _local_translate(self, text: str, lang: str) -> str:
-        """
-        Use deep-translator (GoogleTranslator) if installed.
-        Falls back to a tiny dictionary if unavailable.
-        """
-        if not text.strip():
+    def _translate(self, text, lang):
+        if not text:
             return ""
-
-        # Real translation path
-        if GoogleTranslator is not None:
-            lang_map = {
-                "Japanese": "ja",
-                "Spanish": "es",
-                "French": "fr",
-                "Korean": "ko",
-                "German": "de",
-                "Chinese": "zh-cn",
-            }
-            target_code = lang_map.get(lang, "en")
+        if GoogleTranslator:
+            codes = {"Japanese": "ja", "Spanish": "es", "French": "fr",
+                     "Korean": "ko", "German": "de", "Chinese": "zh-cn"}
             try:
-                translator = GoogleTranslator(source="auto", target=target_code)
-                translated = translator.translate(text)
-                return translated
+                return GoogleTranslator(source="auto",
+                                        target=codes.get(lang, "en")).translate(text)
             except Exception as e:
-                return f"Translation error: {e}"
+                return f"Error: {e}"
+        fb = {("Hello", "Japanese"): "こんにちは",
+              ("Hello", "Spanish"): "Hola", ("Hello", "French"): "Bonjour"}
+        hit = fb.get((text.split(",")[0].strip(), lang))
+        return f"{hit}  (demo)" if hit else f"{text}\n\n[deep-translator not installed]"
 
-        # Fallback: tiny demo dictionary
-        small_dict = {
-            ("Hello", "Japanese"): "こんにちは",
-            ("Hello", "Spanish"): "Hola",
-            ("Hello", "French"): "Bonjour",
-        }
-        if text.strip() in ("Hello", "Hello, how are you?"):
-            key = ("Hello", lang)
-            base = small_dict.get(key, None)
-            if base:
-                return f"{base}  (local demo translation to {lang})"
-
-        return (
-            f"{text}\n\n[Demo] deep-translator is not installed.\n"
-            f"Pretend this is translated into {lang}."
-        )
-
-    # -------- Settings --------
+    # ═══════════════════════════════════════
+    #  Settings
+    # ═══════════════════════════════════════
 
     def show_settings(self):
-        frame = self._show_view(
-            view_id="settings",
-            title="Settings",
-            body="Device + app settings for the Smart Glasses MVP.",
-            placeholder_text=False,
-        )
+        p = self._view("settings", "Settings", "Device + app configuration")
 
-        # Dark / Light mode
-        mode_switch = ctk.CTkSwitch(
-            frame,
-            text="Dark mode",
-            command=lambda: self._toggle_dark_mode(mode_switch),
-        )
-        mode_switch.select()  # default dark
-        mode_switch.pack(anchor="w", padx=20, pady=(20, 10))
+        sw = dict(font=("Consolas", 13), text_color=TXT, progress_color=C)
 
-        # Bluetooth toggle
-        bt_switch = ctk.CTkSwitch(
-            frame,
-            text="Bluetooth enabled",
-            command=lambda: self._toggle_bluetooth(bt_switch),
-        )
-        bt_switch.pack(anchor="w", padx=20, pady=10)
+        dm = ctk.CTkSwitch(p, text="Dark mode", **sw,
+                            command=lambda: self._set_dark(dm))
+        dm.select(); dm.pack(anchor="w", padx=20, pady=(12, 6))
 
-        # Notifications toggle
-        notif_switch = ctk.CTkSwitch(
-            frame,
-            text="Notifications",
-            command=lambda: self._toggle_notifications(notif_switch),
-        )
-        notif_switch.select()
-        notif_switch.pack(anchor="w", padx=20, pady=10)
+        bt = ctk.CTkSwitch(p, text="Bluetooth", **sw,
+                            command=lambda: setattr(self, 'bluetooth_enabled', bool(bt.get())))
+        bt.pack(anchor="w", padx=20, pady=6)
 
-        # Fake brightness slider
-        ctk.CTkLabel(frame, text="Display brightness (demo)").pack(
-            anchor="w", padx=20, pady=(20, 4)
-        )
-        bright_var = ctk.DoubleVar(value=0.8)
-        bright_slider = ctk.CTkSlider(
-            frame, from_=0.2, to=1.0, number_of_steps=8, variable=bright_var
-        )
-        bright_slider.pack(fill="x", padx=20)
+        nf = ctk.CTkSwitch(p, text="Notifications", **sw,
+                            command=lambda: setattr(self, 'notifications_enabled', bool(nf.get())))
+        nf.select(); nf.pack(anchor="w", padx=20, pady=6)
+
+        sl = dict(progress_color=C, button_color=C, button_hover_color="#00FFD5")
+
+        ctk.CTkLabel(p, text="AR transparency", font=("Consolas", 12),
+                      text_color=TXTD).pack(anchor="w", padx=20, pady=(12, 2))
+        asl = ctk.CTkSlider(p, from_=.3, to=1, number_of_steps=14, **sl,
+                              command=lambda v: self._safe(
+                                  lambda: self.attributes("-alpha", float(v))))
+        asl.set(0.92); asl.pack(fill="x", padx=20)
+
+        # Microphone section
+        ctk.CTkFrame(p, fg_color=CD, height=1).pack(fill="x", padx=20, pady=(12, 6))
+
+        mic_state = "✓ Ready" if self.voice.available else "✗ Not installed"
+        ctk.CTkLabel(p, text=f"🎙 Voice Control ({mic_state})",
+                      font=("Consolas", 14, "bold"),
+                      text_color=C).pack(anchor="w", padx=20)
+
+        mic_box = ctk.CTkTextbox(p, height=80, font=("Consolas", 11),
+                                  fg_color="#0A1214", text_color=TXT)
+        mic_box.pack(fill="x", padx=20, pady=(4, 4))
+
+        mics = VoiceController.list_microphones()
+        if not mics:
+            mic_box.insert("end", "No audio devices found.\n")
+        else:
+            mic_box.insert("end", f"{len(mics)} device(s):\n")
+            for i, name in mics:
+                tag = " ◀ ACTIVE" if i == self.voice.mic_index else ""
+                if self.voice.mic_index is None and i == 0:
+                    tag = " ◀ DEFAULT"
+                mic_box.insert("end", f"  [{i}] {name}{tag}\n")
+        mic_box.configure(state="disabled")
+
+        if self.voice.available:
+            row = ctk.CTkFrame(p, fg_color="transparent")
+            row.pack(fill="x", padx=20, pady=(2, 2))
+
+            ctk.CTkLabel(row, text="Device #:", font=("Consolas", 12),
+                          text_color=TXT).pack(side="left", padx=(0, 6))
+
+            cur = self.voice.mic_index
+            iv = ctk.StringVar(value=str(cur if cur is not None else 0))
+            ctk.CTkEntry(row, textvariable=iv, width=50, font=("Consolas", 13),
+                          fg_color=PNL, text_color=TXT, border_color=CD
+                          ).pack(side="left", padx=(0, 6))
+
+            def set_mic():
+                try:
+                    idx = int(iv.get())
+                    self.voice.mic_index = idx
+                    _save_config({"mic_index": idx})
+                    self.toast.show(f"Mic → device [{idx}] (saved)")
+                except ValueError:
+                    self.toast.show("Invalid number")
+
+            self._btn(row, "Set", set_mic, True, 50)
+
+            test_lbl = ctk.CTkLabel(p, text="", font=("Consolas", 11), text_color=AMB)
+            test_lbl.pack(anchor="w", padx=20)
+
+            def test_mic():
+                test_lbl.configure(text="Recording 3s …")
+                self.update_idletasks()
+                def _t():
+                    msg = ""
+                    try:
+                        idx = self.voice.mic_index
+                        m = sr.Microphone(device_index=idx) \
+                            if idx is not None else sr.Microphone()
+                        rec = sr.Recognizer()
+                        with m as s:
+                            audio = rec.record(s, duration=3)
+                        raw = audio.get_raw_data()
+                        shorts = struct.unpack(f"<{len(raw)//2}h", raw)
+                        rms = (sum(x*x for x in shorts) / len(shorts)) ** 0.5
+                        th = VoiceController.ENERGY_THRESHOLD
+                        msg = (f"✓ RMS: {rms:.0f} (threshold: {th}) — "
+                               f"{'GOOD' if rms > th else '⚠ TOO QUIET'}")
+                    except Exception as e:
+                        msg = f"✗ {e}"
+                    def _update_lbl():
+                        try:
+                            if test_lbl.winfo_exists():
+                                test_lbl.configure(text=msg)
+                        except Exception:
+                            pass
+                    self.after(0, _update_lbl)
+                threading.Thread(target=_t, daemon=True).start()
+
+            self._btn_c(p, "🎙 Test Mic (3s)", test_mic, True)
+
+        # Rotary section
+        if self.rotary.available:
+            ctk.CTkFrame(p, fg_color=CD, height=1).pack(fill="x", padx=20, pady=(8, 6))
+            ctk.CTkLabel(p, text="🎛 Rotary Encoder: Connected",
+                          font=("Consolas", 12), text_color=C
+                          ).pack(anchor="w", padx=20)
 
         self.status.append("Opened Settings")
 
-    def _toggle_dark_mode(self, switch: ctk.CTkSwitch):
-        self.dark_mode = bool(switch.get())
+    def _set_dark(self, sw):
+        self.dark_mode = bool(sw.get())
         ctk.set_appearance_mode("dark" if self.dark_mode else "light")
-        self.status.append(f"Theme set to {'dark' if self.dark_mode else 'light'}")
 
-    def _toggle_bluetooth(self, switch: ctk.CTkSwitch):
-        self.bluetooth_enabled = bool(switch.get())
-        self.status.append(
-            f"Bluetooth {'enabled' if self.bluetooth_enabled else 'disabled'}"
-        )
+    # ═══════════════════════════════════════
+    #  System Info
+    # ═══════════════════════════════════════
 
-    def _toggle_notifications(self, switch: ctk.CTkSwitch):
-        self.notifications_enabled = bool(switch.get())
-        self.status.append(
-            f"Notifications {'on' if self.notifications_enabled else 'off'}"
-        )
-    # -------- Power -----------------------------
+    def show_sysinfo(self):
+        p = self._view("sysinfo", "System Info", "Device diagnostics")
+        box = ctk.CTkTextbox(p, font=("Consolas", 12), fg_color="#0A1214", text_color=TXT)
+        box.pack(fill="both", expand=True, padx=8, pady=8)
+
+        info = [
+            f"Platform: {platform.platform()}",
+            f"Machine:  {platform.machine()}",
+            f"Python:   {sys.version.split()[0]}",
+            f"Display:  {WIDTH}x{HEIGHT} @ {TARGET_FPS}fps",
+            f"Pi mode:  {IS_PI}",
+            f"OpenCV:   {'✓' if cv2 else '✗'}",
+            f"Ollama:   {'✓' if ollama else '✗'}",
+            f"STT:      {'✓' if sr else '✗'}",
+            f"GPIO:     {'✓' if GPIO else '✗'}",
+            f"Rotary:   {'✓ active' if self.rotary.available else '✗ inactive'}",
+            f"Voice:    {self.voice.state.value}",
+            f"Photos:   {len(os.listdir(PHOTOS_DIR))} files",
+        ]
+        if psutil:
+            info.append(f"CPU:      {psutil.cpu_count()} cores")
+            info.append(f"RAM:      {psutil.virtual_memory().total // (1024**3)} GB")
+
+        box.insert("end", "\n".join(info))
+        box.configure(state="disabled")
+
+    # ═══════════════════════════════════════
+    #  Power
+    # ═══════════════════════════════════════
 
     def show_power(self):
-        frame = self._show_view(
-            view_id="power",
-            title="Power",
-            body="Manage device power state.",
-            placeholder_text=False,
-    )
+        p = self._view("power", "Power", "Device power options")
+        w = ctk.CTkFrame(p, fg_color="transparent")
+        w.pack(expand=True)
 
-        button_frame = ctk.CTkFrame(frame)
-        button_frame.pack(expand=True)
+        ctk.CTkButton(w, text="⏻  Power Off", fg_color=RED,
+                       hover_color="#FF1744", height=48,
+                       font=("Consolas", 15, "bold"), text_color="white",
+                       command=self._on_close
+                       ).pack(pady=10, padx=36, fill="x")
 
-        def power_off():
-            self.status.append("Powering off…")
-            self.after(300, self.destroy)  # graceful shutdown
+        ctk.CTkButton(w, text="↻  Restart", fg_color=PNL,
+                       hover_color=CD, height=48,
+                       font=("Consolas", 15), text_color=TXT,
+                       command=lambda: (self._on_close(),
+                                        os.execl(sys.executable, sys.executable, *sys.argv))
+                       ).pack(pady=10, padx=36, fill="x")
 
-        def restart():
-            self.status.append("Restarting…")
-            python = os.sys.executable
-            os.execl(python, python, *os.sys.argv)
+        ctk.CTkButton(w, text="ℹ  System Info", fg_color=PNL,
+                       hover_color=CD, height=40,
+                       font=("Consolas", 13), text_color=TXT,
+                       command=self.show_sysinfo).pack(pady=10, padx=36, fill="x")
 
-        def cancel():
-            self.go_home()
+        ctk.CTkButton(w, text="Cancel", fg_color="transparent",
+                       hover_color=PNL, height=36,
+                       font=("Consolas", 13), text_color=TXTD,
+                       command=self._go_home).pack(pady=16)
 
-        ctk.CTkButton(
-            button_frame,
-            text="🔴 Power Off",
-            fg_color="#8B0000",
-            hover_color="#A00000",
-            height=50,
-            font=("Helvetica", 18, "bold"),
-            command=power_off,
-        ).pack(pady=12, padx=40, fill="x")
-
-        ctk.CTkButton(
-            button_frame,
-            text="🔄 Restart",
-            height=50,
-            font=("Helvetica", 18),
-            command=restart,
-        ).pack(pady=12, padx=40, fill="x")
-
-        ctk.CTkButton(
-            button_frame,
-            text="Cancel",
-            height=40,
-            font=("Helvetica", 16),
-            command=cancel,
-        ).pack(pady=20)
-
-
-    # -------- Bluetooth (simulated scan) --------
+    # ═══════════════════════════════════════
+    #  Bluetooth
+    # ═══════════════════════════════════════
 
     def show_bluetooth(self):
-        frame = self._show_view(
-            view_id="bluetooth",
-            title="Bluetooth",
-            body="Scan for nearby devices (simulated for MVP).\n"
-            "On the real glasses this would use the Bluetooth stack.",
-            placeholder_text=False,
-        )
+        p = self._view("bluetooth", "Bluetooth", "Nearby device scan (simulated)")
 
-        result_box = ctk.CTkTextbox(frame, font=("Consolas", 13))
-        result_box.pack(fill="both", expand=True, padx=10, pady=10)
-        result_box.insert("end", "Press 'Scan' to search for devices…\n")
-        result_box.configure(state="disabled")
+        box = ctk.CTkTextbox(p, font=("Consolas", 13),
+                              fg_color="#0A1214", text_color=TXT)
+        box.pack(fill="both", expand=True, padx=8, pady=8)
+        box.insert("end", "Press Scan to search …\n")
+        box.configure(state="disabled")
 
         def scan():
-            # Fake device list for demo
-            import random, datetime as dt
+            import random
+            devs = ["Phone – Pixel 9 Pro", "Laptop – MacBook Pro",
+                    "Earbuds – AirPods Pro", "Watch – Galaxy Watch",
+                    "Speaker – JBL Flip 6", "Controller – PS5 DualSense"]
+            random.shuffle(devs)
+            now = datetime.now().strftime("%H:%M:%S")
+            box.configure(state="normal")
+            box.insert("end", f"\n[{now}] Found {len(devs)} devices:\n")
+            for d in devs:
+                box.insert("end", f"  ▸ {d}\n")
+            box.configure(state="disabled")
+            box.see("end")
 
-            fake_devices = [
-                "Phone – Pixel 9 Pro",
-                "Laptop – MacBook Pro",
-                "Earbuds – AirPods Pro",
-                "Watch – Galaxy Watch",
-            ]
-            random.shuffle(fake_devices)
-            now = dt.datetime.now().strftime("%H:%M:%S")
+        self._btn_c(p, "Scan", scan, True)
 
-            result_box.configure(state="normal")
-            result_box.insert("end", f"\n[{now}] Scan complete. Devices found:\n")
-            for d in fake_devices:
-                result_box.insert("end", f" • {d}\n")
-            result_box.configure(state="disabled")
-            result_box.see("end")
-            self.status.append("Bluetooth scan (demo) finished")
-
-        ctk.CTkButton(frame, text="Scan for devices", command=scan).pack(pady=(0, 10))
-
-    # -------- Track / GPS (IP-based demo) --------
+    # ═══════════════════════════════════════
+    #  Track / GPS
+    # ═══════════════════════════════════════
 
     def show_track(self):
-        frame = self._show_view(
-            view_id="track",
-            title="Track / Location",
-            body="Approximate location based on network (demo).\n"
-            "Real device would use onboard GPS.",
-            placeholder_text=False,
-        )
+        p = self._view("track", "Track / Location",
+                        "IP geolocation demo · real device uses GPS")
 
-        info_box = ctk.CTkTextbox(frame, font=("Consolas", 13))
-        info_box.pack(fill="both", expand=True, padx=10, pady=10)
-        info_box.insert("end", "Press 'Refresh location' to query IP-based geolocation.\n")
-        info_box.configure(state="disabled")
+        box = ctk.CTkTextbox(p, font=("Consolas", 13),
+                              fg_color="#0A1214", text_color=TXT)
+        box.pack(fill="both", expand=True, padx=8, pady=8)
+        box.insert("end", "Press Refresh to locate …\n")
+        box.configure(state="disabled")
 
-        def refresh():
-            info_box.configure(state="normal")
-            info_box.insert("end", "\nRequesting location…\n")
-            info_box.configure(state="disabled")
+        def go():
+            box.configure(state="normal")
+            box.insert("end", "\nLocating …\n")
+            box.configure(state="disabled")
             self.update_idletasks()
+            def _loc():
+                loc = self._ip_loc()
+                self.after(0, lambda: _show(loc))
+            def _show(loc):
+                try:
+                    if not box.winfo_exists():
+                        return
+                    box.configure(state="normal")
+                    box.insert("end", loc + "\n")
+                    box.configure(state="disabled")
+                    box.see("end")
+                except Exception:
+                    pass
+            threading.Thread(target=_loc, daemon=True).start()
 
-            loc = self._fetch_ip_location()
+        self._btn_c(p, "Refresh", go, True)
 
-            info_box.configure(state="normal")
-            info_box.insert("end", f"{loc}\n")
-            info_box.configure(state="disabled")
-            info_box.see("end")
-
-        ctk.CTkButton(frame, text="Refresh location", command=refresh).pack(
-            pady=(0, 10)
-        )
-
-    def _fetch_ip_location(self) -> str:
+    def _ip_loc(self):
         if not requests:
-            return "requests module not available – cannot query network."
+            return "requests not available."
         try:
-            r = requests.get("https://ipapi.co/json/", timeout=3)
+            r = requests.get("https://ipapi.co/json/", timeout=5)
             if r.status_code != 200:
-                return f"Location request failed with HTTP {r.status_code}."
-            data = r.json()
-            city = data.get("city", "?")
-            region = data.get("region", "?")
-            country = data.get("country_name", "?")
-            lat = data.get("latitude", "?")
-            lon = data.get("longitude", "?")
-            return (
-                f"Approximate IP-based location:\n"
-                f"  {city}, {region}, {country}\n"
-                f"  Lat: {lat}  Lon: {lon}"
-            )
+                return f"HTTP {r.status_code}"
+            d = r.json()
+            return (f"  {d.get('city','?')}, {d.get('region','?')}, "
+                    f"{d.get('country_name','?')}\n"
+                    f"  Lat {d.get('latitude','?')}  ·  Lon {d.get('longitude','?')}")
         except Exception as e:
-            return f"Location lookup failed: {e}"
+            return f"Failed: {e}"
 
-    # -------- Music (fake controls) --------
+    # ═══════════════════════════════════════
+    #  Music
+    # ═══════════════════════════════════════
 
     def show_music(self):
-        frame = self._show_view(
-            view_id="music",
-            title="Music",
-            body="Now Playing + basic controls (demo, no real audio).",
-            placeholder_text=False,
-        )
+        p = self._view("music", "Music", "Now playing · demo controls")
 
-        track_label = ctk.CTkLabel(
-            frame,
-            text="Now Playing: Lofi Beats for Coding",
-            font=("Helvetica", 18, "bold"),
-        )
-        track_label.pack(pady=(20, 10))
+        ctk.CTkLabel(p, text="♫  Lofi Beats for Coding",
+                      font=("Consolas", 17, "bold"),
+                      text_color=C).pack(pady=(18, 2))
+        ctk.CTkLabel(p, text="Chillhop Records",
+                      font=("Consolas", 12), text_color=TXTD).pack(pady=(0, 14))
 
-        controls = ctk.CTkFrame(frame)
-        controls.pack(pady=10)
+        row = ctk.CTkFrame(p, fg_color="transparent")
+        row.pack(pady=8)
+        for t in ["⏮ Prev", "▶ Play", "⏭ Next"]:
+            ctk.CTkButton(row, text=t, width=100, height=36, corner_radius=6,
+                           fg_color=PNLE, hover_color=CD,
+                           text_color=TXT, font=("Consolas", 13),
+                           command=lambda x=t: self.status.append(f"Music: {x}")
+                           ).pack(side="left", padx=5)
 
-        def log(action):
-            self.status.append(f"Music: {action}")
+        ctk.CTkLabel(p, text="Volume", font=("Consolas", 11),
+                      text_color=TXTD).pack(pady=(18, 2))
+        vol = ctk.CTkSlider(p, from_=0, to=100, number_of_steps=10,
+                             progress_color=C, button_color=C)
+        vol.set(70); vol.pack(fill="x", padx=36)
 
-        for txt in ["⏮ Prev", "▶ Play/Pause", "⏭ Next"]:
-            ctk.CTkButton(
-                controls, text=txt, width=120, command=lambda t=txt: log(t)
-            ).pack(side="left", padx=8)
+    # ═══════════════════════════════════════
+    #  Shared helpers
+    # ═══════════════════════════════════════
 
-        vol_label = ctk.CTkLabel(frame, text="Volume")
-        vol_label.pack(pady=(20, 4))
-        vol_slider = ctk.CTkSlider(frame, from_=0, to=100, number_of_steps=10)
-        vol_slider.set(70)
-        vol_slider.pack(fill="x", padx=40)
+    def _btn(self, parent, text, cmd, primary=False, w=None):
+        kw = dict(text=text, command=cmd, corner_radius=6,
+                  font=("Consolas", 12, "bold") if primary else ("Consolas", 12),
+                  fg_color=CD if primary else PNL,
+                  hover_color=C if primary else PNLE,
+                  text_color="black" if primary else TXT)
+        if w:
+            kw["width"] = w
+        ctk.CTkButton(parent, **kw).pack(side="left", padx=3)
 
-    # -------- main loop --------
+    def _btn_c(self, parent, text, cmd, primary=False):
+        ctk.CTkButton(parent, text=text, command=cmd, width=160, corner_radius=6,
+                       font=("Consolas", 13, "bold") if primary else ("Consolas", 13),
+                       fg_color=CD if primary else PNL,
+                       hover_color=C if primary else PNLE,
+                       text_color="black" if primary else TXT).pack(pady=(0, 8))
+
+    @staticmethod
+    def _safe(fn):
+        try:
+            fn()
+        except Exception:
+            pass
+
+    # ═══════════════════════════════════════
+    #  Main loop
+    # ═══════════════════════════════════════
 
     def _tick(self):
         now = time.perf_counter()
         dt = max(1e-3, now - self._last_time)
         self._last_time = now
-
         if self.current_view == "home":
             self.cflow.step(dt)
-
         self.status.tick()
-        delay_ms = max(1, int(1000 / TARGET_FPS))
-        self.after(delay_ms, self._tick)
+
+        # Timer display
+        if self._timer_running:
+            elapsed = now - self._timer_start
+            m, s = divmod(int(elapsed), 60)
+            self.cv.itemconfigure(self._timer_id, text=f"⏱ {m:02d}:{s:02d}")
+
+        self.after(max(1, int(1000 / TARGET_FPS)), self._tick)
 
 
 if __name__ == "__main__":
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("dark-blue")
-    app = VAApp()
-    app.mainloop()
+    VAApp().mainloop()
