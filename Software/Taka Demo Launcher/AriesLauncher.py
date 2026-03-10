@@ -5,6 +5,7 @@ import threading
 import struct
 import enum
 import logging
+import subprocess
 import tkinter as tk
 from datetime import datetime
 
@@ -140,19 +141,30 @@ APPS = [
     ("power.png",          "Power"),
 ]
 
-BUILD_STR = "VA-OS1.1 · Pandora Build · Oct 2025"
+BUILD_STR = "VA-OS1.1 · Pandora Build"
 
-# HUD palette
+# Apple-inspired dark palette
 
-C    = "#00E5FF"
-CD   = "#007A8C"
-TXT  = "#E0F7FA"
-TXTD = "#80CBC4"
-BG   = "#000000"
-PNL  = "#0D1B1E"
-PNLE = "#1A3A40"
-AMB  = "#FF6D00"
-RED  = "#D50000"
+C    = "#007AFF"       # Apple blue (accent)
+CD   = "#0A84FF"       # Apple blue light
+TXT  = "#FFFFFF"       # Primary text
+TXTD = "#8E8E93"       # Secondary text (system gray)
+BG   = "#000000"       # Pure black (AR transparent)
+PNL  = "#1C1C1E"       # Apple system gray 6
+PNLE = "#2C2C2E"       # Apple system gray 5
+AMB  = "#FF9F0A"       # Apple orange
+RED  = "#FF3B30"       # Apple red
+GRN  = "#30D158"       # Apple green
+
+# System font — pick best available
+FONT = "Helvetica Neue"
+FONT_MONO = "SF Mono"
+for _f in ("SF Pro Display", "Helvetica Neue", "Segoe UI", "Helvetica"):
+    FONT = _f
+    break
+for _f in ("SF Mono", "Menlo", FONT):
+    FONT_MONO = _f
+    break
 
 SCALE_DROP = 0.14
 ALPHA_DROP = 0.22
@@ -170,24 +182,15 @@ def _load(path):
 
 
 def _circle(img, size):
+    """Render icon as Apple-style rounded square (squircle)."""
     img = img.resize((size, size), Image.LANCZOS)
+    r = int(size * 0.22)  # Corner radius ~22% like iOS
     mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
+    d = ImageDraw.Draw(mask)
+    d.rounded_rectangle((0, 0, size, size), radius=r, fill=255)
     out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     out.paste(img, (0, 0), mask)
     return out
-
-
-def _glow(radius, alpha=140, color=(0, 229, 255)):
-    w = h = radius * 2
-    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    for sc, a in [(0.55, alpha), (1.15, int(alpha * .7)),
-                  (2.0, int(alpha * .4)), (3.0, int(alpha * .18))]:
-        r = radius * sc
-        cx, cy = w / 2, h / 2
-        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(*color, a))
-    return img.filter(ImageFilter.GaussianBlur(int(radius * .3)))
 
 
 def _batt():
@@ -232,32 +235,34 @@ def _time_str():
 # ═══════════════════════════════════════
 
 class StatusBar:
+    """Apple-style minimal status bar — time left, system right."""
     def __init__(self, canvas):
         self.cv = canvas
         self._lines = []
-        self._tid = None
+        self._time_id = canvas.create_text(
+            28, 18, anchor="nw", fill=TXT,
+            font=(FONT, 13, "bold"), text="")
+        self._sys_id = canvas.create_text(
+            WIDTH - 28, 18, anchor="ne", fill=TXTD,
+            font=(FONT, 11), text="")
+        self._msg_id = canvas.create_text(
+            WIDTH // 2, 18, anchor="n", fill=TXTD,
+            font=(FONT, 10), text="")
         self._last = 0.0
-        for dx, dy in [(0, 14), (14, 0)]:
-            canvas.create_line(16, 12, 16 + dx, 12 + dy, fill=CD)
 
     def append(self, msg):
-        self._lines = (self._lines + [msg])[-3:]
+        self._lines = (self._lines + [msg])[-1:]
 
     def tick(self):
         now = time.perf_counter()
         if now - self._last < 0.5:
             return
         self._last = now
-        body = (f"{_time_str()}  ·  BAT {_batt()}  ·  CPU {_cpu()}"
-                f"  ·  RAM {_ram()}\n{BUILD_STR}")
-        if self._lines:
-            body += "\n" + "\n".join(self._lines)
-        if self._tid is None:
-            self._tid = self.cv.create_text(
-                32, 30, anchor="nw", fill=TXTD,
-                font=("Consolas", 11), text=body)
-        else:
-            self.cv.itemconfigure(self._tid, text=body)
+        self.cv.itemconfigure(self._time_id, text=_time_str())
+        self.cv.itemconfigure(self._sys_id,
+                              text=f"BAT {_batt()}  CPU {_cpu()}  RAM {_ram()}")
+        msg = self._lines[0] if self._lines else ""
+        self.cv.itemconfigure(self._msg_id, text=msg)
 
 
 # ═══════════════════════════════════════
@@ -265,19 +270,21 @@ class StatusBar:
 # ═══════════════════════════════════════
 
 class Toast:
+    """Apple-style pill notification."""
     def __init__(self, canvas):
         self.cv = canvas
-        self._bg = canvas.create_rectangle(0, 0, 0, 0, fill=PNL, outline=CD, width=1,
-                                            state="hidden")
+        self._bg = canvas.create_rectangle(0, 0, 0, 0,
+            fill=PNLE, outline="", width=0, state="hidden")
         self._txt = canvas.create_text(0, 0, text="", fill=TXT, anchor="n",
-                                        font=("Consolas", 12), state="hidden")
+                                        font=(FONT, 12), state="hidden")
         self._after = None
 
-    def show(self, msg, duration=3000):
-        w = min(len(msg) * 9 + 40, WIDTH - 100)
+    def show(self, msg, duration=2500):
+        w = min(len(msg) * 8 + 48, WIDTH - 120)
         x = WIDTH // 2
-        self.cv.coords(self._bg, x - w // 2, 90, x + w // 2, 122)
-        self.cv.coords(self._txt, x, 96)
+        y = HEIGHT - 70
+        self.cv.coords(self._bg, x - w // 2, y - 2, x + w // 2, y + 28)
+        self.cv.coords(self._txt, x, y + 2)
         self.cv.itemconfigure(self._txt, text=msg)
         self.cv.itemconfigure(self._bg, state="normal")
         self.cv.itemconfigure(self._txt, state="normal")
@@ -692,13 +699,10 @@ class CoverFlow:
             self.apps.append({"id": os.path.splitext(fn)[0],
                               "label": label, "img": img, "cache": {}})
 
-        g = _glow(int(BASE_ICON * 1.2), 140)
-        self._glow_tk = ImageTk.PhotoImage(g)
-        self._glow_id = canvas.create_image(0, 0, image=self._glow_tk, anchor="nw")
         self._icons = [canvas.create_image(0, 0, image=None, anchor="nw")
                        for _ in range(5)]
         self._label = canvas.create_text(
-            0, 0, text="", fill=C, font=("Consolas", 16, "bold"))
+            0, 0, text="", fill=TXT, font=(FONT, 15))
 
     def _tkimg(self, app, sz, alpha):
         sq = max(14, round(sz / SIZE_STEP_PX) * SIZE_STEP_PX)
@@ -753,14 +757,10 @@ class CoverFlow:
             self.cv.coords(self._icons[slot],
                            int(cx - tk.width() / 2), int(cy - tk.height() / 2))
             self._refs[slot] = tk
-            if i == 2:
-                self.cv.coords(self._glow_id,
-                               int(cx - self._glow_tk.width() / 2),
-                               int(cy - self._glow_tk.height() / 2 + BASE_ICON * .03))
             positions.append((cx, cy, tk.width(), app["label"]))
         for cx, cy, w, label in positions:
             if abs(cx - mx) < 2:
-                self.cv.itemconfigure(self._label, text=label, fill=C)
+                self.cv.itemconfigure(self._label, text=label, fill=TXT)
                 self.cv.coords(self._label, cx, cy + w / 2 + 28)
                 break
 
@@ -798,12 +798,12 @@ class VAApp(ctk.CTk):
         self.cflow = CoverFlow(self.cv, APPS)
 
         self._mic_id = self.cv.create_text(
-            WIDTH - 30, HEIGHT - 30, text="🎙", anchor="se",
-            fill=TXTD, font=("Consolas", 18))
+            WIDTH - 28, HEIGHT - 24, text="", anchor="se",
+            fill=TXTD, font=(FONT, 11))
         self.cv.create_text(
-            WIDTH // 2, HEIGHT - 22, anchor="s", fill=CD,
-            font=("Consolas", 10),
-            text='[V] Voice  ·  [S] Screenshot  ·  [T] Timer  ·  [Enter] Open  ·  [Esc] Back')
+            WIDTH // 2, HEIGHT - 24, anchor="s", fill="#48484A",
+            font=(FONT, 10),
+            text='V Voice    S Screenshot    T Timer    Enter Open    Esc Back')
 
         # Overlay frame — raw tk.Frame to avoid ghost rectangle
         self._vf = None
@@ -828,8 +828,8 @@ class VAApp(ctk.CTk):
         self._timer_running = False
         self._timer_start = 0
         self._timer_id = self.cv.create_text(
-            WIDTH - 30, 30, text="", anchor="ne", fill=C,
-            font=("Consolas", 14, "bold"))
+            WIDTH - 28, 40, text="", anchor="ne", fill=TXT,
+            font=(FONT, 13, "bold"))
 
         # ── Voice controller ──
         cfg = _load_config()
@@ -901,6 +901,7 @@ class VAApp(ctk.CTk):
         self.voice.shutdown()
         self.rotary.shutdown()
         self._stop_camera()
+        self._close_browser()
         self.destroy()
 
     # ═══════════════════════════════════════
@@ -928,13 +929,13 @@ class VAApp(ctk.CTk):
     def _voice_handle_state(self, state):
         """UI-thread handler for voice state changes."""
         if state == VoiceState.LISTENING:
-            self.cv.itemconfigure(self._mic_id, fill=AMB)
-            self.toast.show("🎙 Speak now …")
+            self.cv.itemconfigure(self._mic_id, text="Listening…", fill=AMB)
+            self.toast.show("Speak now…")
         elif state == VoiceState.PROCESSING:
-            self.cv.itemconfigure(self._mic_id, fill=C)
-            self.toast.show("Processing …", 1500)
+            self.cv.itemconfigure(self._mic_id, text="Processing…", fill=C)
+            self.toast.show("Processing…", 1500)
         elif state == VoiceState.IDLE:
-            self.cv.itemconfigure(self._mic_id, fill=TXTD)
+            self.cv.itemconfigure(self._mic_id, text="", fill=TXTD)
 
     # ═══════════════════════════════════════
     #  Rotary callbacks (called from GPIO thread)
@@ -945,8 +946,12 @@ class VAApp(ctk.CTk):
         self.after(0, lambda: self._nav(direction))
 
     def _rotary_click(self):
-        """GPIO thread → UI thread: select/open."""
-        self.after(0, self._open_sel)
+        """GPIO thread → UI thread: select app, or voice if browser open."""
+        if self._browser_is_open():
+            # Browser window has focus — rotary click triggers voice instead
+            self.after(0, lambda: self.voice.activate())
+        else:
+            self.after(0, self._open_sel)
 
     def _rotary_long(self):
         """GPIO thread → UI thread: go home."""
@@ -955,15 +960,8 @@ class VAApp(ctk.CTk):
     # ── HUD chrome ──
 
     def _draw_chrome(self):
-        c, p, b = CD, 8, 40
-        for x1, y1, x2, y2, x3, y3 in [
-            (p, p, p+b, p, p, p+b),
-            (WIDTH-p, p, WIDTH-p-b, p, WIDTH-p, p+b),
-            (p, HEIGHT-p, p+b, HEIGHT-p, p, HEIGHT-p-b),
-            (WIDTH-p, HEIGHT-p, WIDTH-p-b, HEIGHT-p, WIDTH-p, HEIGHT-p-b)]:
-            self.cv.create_line(x1, y1, x2, y2, fill=c)
-            self.cv.create_line(x1, y1, x3, y3, fill=c)
-        self.cv.create_line(32, 82, 400, 82, fill=PNLE)
+        """Minimal chrome — just a subtle separator under the status bar."""
+        self.cv.create_line(28, 38, WIDTH - 28, 38, fill="#2C2C2E")
 
     # ── Key handlers ──
 
@@ -1073,9 +1071,17 @@ class VAApp(ctk.CTk):
                 cmd = cmd[len(prefix):]
                 break
 
+        # Handle compound "browser and search X" / "browser search X"
+        for sep in ("and search for ", "and search ", "search for ", "search "):
+            if "browser" in cmd and sep in cmd:
+                query = cmd.split(sep, 1)[1].strip()
+                if query:
+                    self._browser_search(query)
+                    return
+
         words = set(cmd.split())
 
-        # Explicit search — ONLY when user says "search ..."
+        # Explicit search — "search X" / "look up X" / "google X"
         for prefix in ("search for ", "look up ", "google ", "search "):
             if cmd.startswith(prefix):
                 q = cmd[len(prefix):].strip()
@@ -1091,6 +1097,8 @@ class VAApp(ctk.CTk):
             ({"screenshot"},       self._screenshot),
             ({"timer"},            self._toggle_timer),
             ({"stopwatch"},        self._toggle_timer),
+            ({"close"},            self._go_home),
+            ({"exit"},             self._go_home),
             ({"camera"},           self.show_camera),
             ({"photos"},           self.show_photos),
             ({"photo"},            self.show_photos),
@@ -1128,7 +1136,7 @@ class VAApp(ctk.CTk):
                 action()
                 return
 
-        # No match — tell user instead of auto-searching
+        # No match — tell user
         self.toast.show(f"Unknown command: \"{cmd}\"")
         self.status.append(f"No match: \"{cmd}\"")
 
@@ -1161,10 +1169,10 @@ class VAApp(ctk.CTk):
     def _go_home(self):
         self.current_view = "home"
         self._stop_camera()
+        self._close_browser()
         if self._vf_visible and self._vf:
             self._vf.place_forget()
             self._vf_visible = False
-        # Reset focus to canvas — prevents dead widget focus after leaving apps
         self.cv.focus_set()
         self.status.append("Home")
 
@@ -1195,30 +1203,31 @@ class VAApp(ctk.CTk):
             self._vf.tkraise()
             self._vf_visible = True
 
-        # Top bar
-        top = ctk.CTkFrame(self._vf, fg_color="transparent", height=50)
+        # Top bar — Apple style
+        top = ctk.CTkFrame(self._vf, fg_color="transparent", height=52)
         top.pack(fill="x")
         top.pack_propagate(False)
-        ctk.CTkLabel(top, text=f"◂  {title}", font=("Consolas", 20, "bold"),
-                      text_color=C).pack(side="left", padx=20, pady=10)
-        ctk.CTkLabel(top, text="[ESC] back  ·  [V] voice  ·  [S] screenshot",
-                      font=("Consolas", 10),
-                      text_color=TXTD).pack(side="right", padx=20, pady=10)
+        ctk.CTkLabel(top, text=f"‹  {title}", font=(FONT, 18),
+                      text_color=C).pack(side="left", padx=24, pady=12)
+        ctk.CTkLabel(top, text="Esc back  ·  V voice",
+                      font=(FONT, 10),
+                      text_color="#48484A").pack(side="right", padx=24, pady=12)
 
-        ctk.CTkFrame(self._vf, fg_color=CD, height=1).pack(fill="x", padx=20)
+        # Subtle separator
+        ctk.CTkFrame(self._vf, fg_color="#2C2C2E", height=1).pack(fill="x", padx=0)
 
         if body:
-            ctk.CTkLabel(self._vf, text=body, font=("Consolas", 12),
+            ctk.CTkLabel(self._vf, text=body, font=(FONT, 11),
                           text_color=TXTD, wraplength=WIDTH - 100,
-                          justify="center").pack(pady=(6, 2))
+                          justify="center").pack(pady=(8, 2))
 
-        panel = ctk.CTkFrame(self._vf, corner_radius=10, fg_color=PNL,
-                              border_color=PNLE, border_width=1)
-        panel.pack(pady=(4, 6), padx=28, fill="both", expand=True)
+        panel = ctk.CTkFrame(self._vf, corner_radius=14, fg_color=PNL,
+                              border_color=PNLE, border_width=0)
+        panel.pack(pady=(6, 10), padx=24, fill="both", expand=True)
 
         if placeholder:
-            ctk.CTkLabel(panel, text=f"[{title} — not yet implemented]",
-                          font=("Consolas", 13), text_color=TXTD,
+            ctk.CTkLabel(panel, text=f"{title} — coming soon",
+                          font=(FONT, 14), text_color=TXTD,
                           justify="center").place(relx=.5, rely=.5, anchor="center")
         return panel
 
@@ -1234,8 +1243,8 @@ class VAApp(ctk.CTk):
         p = self._view("assistant", "Assistant",
                         "Local AI assistant powered by Ollama")
 
-        hist = ctk.CTkTextbox(p, font=("Consolas", 13), wrap="word",
-                               fg_color="#0A1214", text_color=TXT)
+        hist = ctk.CTkTextbox(p, font=(FONT, 13), wrap="word",
+                               fg_color="#1C1C1E", text_color=TXT)
         hist.pack(side="top", fill="both", expand=True, padx=8, pady=(8, 4))
         hist.insert("end", "Aries ▸ Hi! How can I help?\n")
         if ollama:
@@ -1248,8 +1257,8 @@ class VAApp(ctk.CTk):
         bar.pack(side="bottom", fill="x", padx=8, pady=8)
 
         ent = ctk.CTkEntry(bar, placeholder_text="Type a message …",
-                            font=("Consolas", 13), fg_color=PNL,
-                            text_color=TXT, border_color=CD)
+                            font=(FONT, 13), fg_color=PNL,
+                            text_color=TXT, border_color="#3A3A3C")
         ent.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
         def send(_=None):
@@ -1323,15 +1332,15 @@ class VAApp(ctk.CTk):
                         "Live preview · Capture saves to gallery")
 
         self._cam_label = ctk.CTkLabel(p, text="Initializing …",
-                                        font=("Consolas", 13), text_color=TXTD)
+                                        font=(FONT, 13), text_color=TXTD)
         self._cam_label.pack(fill="both", expand=True)
 
-        ctk.CTkLabel(p, text="● LIVE", font=("Consolas", 11, "bold"),
-                      text_color=AMB).place(relx=.97, rely=.03, anchor="ne")
+        ctk.CTkLabel(p, text="● LIVE", font=(FONT, 11, "bold"),
+                      text_color=RED).place(relx=.97, rely=.03, anchor="ne")
 
         count = len([f for f in os.listdir(PHOTOS_DIR)
                      if f.lower().endswith((".png", ".jpg", ".jpeg"))])
-        ctk.CTkLabel(p, text=f"📷 {count}", font=("Consolas", 10),
+        ctk.CTkLabel(p, text=f"📷 {count}", font=(FONT, 10),
                       text_color=TXTD).place(relx=.03, rely=.03, anchor="nw")
 
         bb = ctk.CTkFrame(self._vf, fg_color="transparent")
@@ -1427,21 +1436,21 @@ class VAApp(ctk.CTk):
 
         if not files:
             ctk.CTkLabel(p, text="No photos yet.\nUse Camera or press [S].",
-                          font=("Consolas", 13), text_color=TXTD,
+                          font=(FONT, 13), text_color=TXTD,
                           justify="center").place(relx=.5, rely=.5, anchor="center")
             return
 
-        self._pv_label = ctk.CTkLabel(p, text="", fg_color="#0A1214",
-                                       corner_radius=6, width=520, height=280)
+        self._pv_label = ctk.CTkLabel(p, text="", fg_color="#1C1C1E",
+                                       corner_radius=12, width=520, height=280)
         self._pv_label.pack(pady=(8, 4))
         self._pv_refs = []
 
-        self._pv_name = ctk.CTkLabel(p, text="", font=("Consolas", 10),
+        self._pv_name = ctk.CTkLabel(p, text="", font=(FONT, 10),
                                       text_color=TXTD)
         self._pv_name.pack(pady=(0, 2))
 
         scroll = ctk.CTkScrollableFrame(p, fg_color="transparent",
-                                         scrollbar_button_color=CD, height=130)
+                                         scrollbar_button_color="#48484A", height=130)
         scroll.pack(fill="x", padx=8, pady=(0, 4))
 
         row = ctk.CTkFrame(scroll, fg_color="transparent")
@@ -1457,7 +1466,7 @@ class VAApp(ctk.CTk):
                 tk_img = ImageTk.PhotoImage(thumb)
                 self._pv_refs.append(tk_img)
                 ctk.CTkButton(row, image=tk_img, text="", width=138, height=90,
-                               corner_radius=4, fg_color=PNLE, hover_color=CD,
+                               corner_radius=8, fg_color=PNLE, hover_color="#3A3A3C",
                                command=lambda fp=fpath, fn=fname: self._pv_show(fp, fn)
                                ).pack(side="left", padx=3)
             except Exception:
@@ -1474,13 +1483,13 @@ class VAApp(ctk.CTk):
                 self.toast.show("Photo deleted")
                 self.show_photos()
 
-        ctk.CTkButton(bb, text="🗑 Delete", width=100, corner_radius=6,
-                       fg_color=RED, hover_color="#FF1744",
-                       text_color="white", font=("Consolas", 12),
+        ctk.CTkButton(bb, text="Delete", width=100, corner_radius=20,
+                       fg_color=RED, hover_color="#FF453A",
+                       text_color="white", font=(FONT, 12),
                        command=delete).pack(side="left", padx=4)
 
         ctk.CTkLabel(bb, text=f"{len(files)} photo(s)",
-                      font=("Consolas", 11), text_color=TXTD
+                      font=(FONT, 11), text_color=TXTD
                       ).pack(side="left", padx=12)
 
         if files:
@@ -1502,46 +1511,102 @@ class VAApp(ctk.CTk):
     # ═══════════════════════════════════════
     #  Browser
     # ═══════════════════════════════════════
+    #  pywebview (subprocess) = full JS, Google/YouTube work
+    #  tkinterweb fallback = no JS, DuckDuckGo HTML-lite
     #
-    #  Uses DuckDuckGo HTML-lite for search — it renders cleanly
-    #  in tkinterweb's basic HTML engine (Google/Bing need JavaScript).
-    #  Typing a URL goes directly; typing words searches DDG.
-    #
+    #  Voice: "search X" / "browser search X" → opens with search
+    #         "close browser" / "exit" / "go home" → kills browser
+    #  Rotary: long press → kills browser + go home
+    # ═══════════════════════════════════════
 
-    SEARCH_ENGINES = {
-        "DuckDuckGo": "https://html.duckduckgo.com/html/?q=",
-        "Google":     "https://www.google.com/search?q=",
-        "Wikipedia":  "https://en.wikipedia.org/w/index.php?search=",
-    }
+    _browser_proc = None
 
-    def show_browser(self):
-        p = self._view("browser", "Browser")
+    def _browser_is_open(self):
+        return self._browser_proc is not None and self._browser_proc.poll() is None
 
-        if HtmlFrame is None:
-            ctk.CTkLabel(p, text="tkinterweb not installed.\npip install tkinterweb",
-                          font=("Consolas", 13), text_color=TXTD,
-                          justify="center").place(relx=.5, rely=.5, anchor="center")
+    def _close_browser(self):
+        """Kill the pywebview subprocess if running."""
+        if self._browser_is_open():
+            self._browser_proc.terminate()
+            self._browser_proc = None
+            self.status.append("Browser closed")
+            self.toast.show("Browser closed")
+
+    def show_browser(self, search_query=None):
+        # Primary: pywebview subprocess — full JavaScript
+        try:
+            import webview as _wv_check
+            has_pywebview = True
+        except ImportError:
+            has_pywebview = False
+
+        if has_pywebview:
+            # Google works in pywebview (full JS engine)
+            url = "https://www.google.com"
+            if search_query:
+                url = "https://www.google.com/search?q=" + search_query.replace(" ", "+")
+
+            if self._browser_is_open():
+                self.toast.show("Browser already open")
+                return
+
+            self.toast.show("Opening browser…", 1500)
+            self.status.append(f"Browser → {search_query or 'Google'}")
+
+            script = (
+                "import webview, sys; "
+                "webview.create_window('Aries Browser', sys.argv[1], "
+                f"width={WIDTH}, height={HEIGHT}, confirm_close=False); "
+                "webview.start()"
+            )
+            try:
+                self._browser_proc = subprocess.Popen(
+                    [sys.executable, "-c", script, url],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                def _watch():
+                    if self._browser_proc:
+                        self._browser_proc.wait()
+                    self.after(0, lambda: self.status.append("Browser closed"))
+                    self._browser_proc = None
+                threading.Thread(target=_watch, daemon=True).start()
+            except Exception as exc:
+                msg = str(exc)
+                self.toast.show(f"Browser failed: {msg}")
             return
+
+        # Fallback: tkinterweb embedded — DuckDuckGo (no JS needed)
+        if HtmlFrame is not None:
+            ddg_url = "https://html.duckduckgo.com/"
+            if search_query:
+                ddg_url = "https://html.duckduckgo.com/html/?q=" + search_query.replace(" ", "+")
+            self._show_embedded_browser(ddg_url)
+            return
+
+        # Nothing available
+        p = self._view("browser", "Browser")
+        ctk.CTkLabel(p, text="No browser available.\n\n"
+                      "pip install pywebview   (full JS)\n"
+                      "pip install tkinterweb  (basic HTML)",
+                      font=(FONT, 13), text_color=TXTD,
+                      justify="center").place(relx=.5, rely=.5, anchor="center")
+
+    def _show_embedded_browser(self, start_url):
+        """Fallback embedded browser — no JavaScript."""
+        p = self._view("browser", "Browser")
 
         nav = ctk.CTkFrame(p, fg_color="transparent")
         nav.pack(fill="x", padx=10, pady=(8, 4))
 
-        # Search engine selector
-        self._b_engine = ctk.StringVar(value="DuckDuckGo")
-        ctk.CTkOptionMenu(nav, values=list(self.SEARCH_ENGINES.keys()),
-                           variable=self._b_engine, width=120,
-                           fg_color=PNL, button_color=CD,
-                           button_hover_color=C, text_color=TXT,
-                           font=("Consolas", 11)).pack(side="left", padx=(0, 6))
-
         self._b_url = ctk.StringVar(value="")
         ent = ctk.CTkEntry(nav, textvariable=self._b_url,
-                            placeholder_text="Search anything or enter URL …",
-                            font=("Consolas", 13), fg_color=PNL,
-                            text_color=TXT, border_color=CD)
+                            placeholder_text="Search or enter URL…",
+                            font=(FONT, 13), fg_color=PNL,
+                            text_color=TXT, border_color="#3A3A3C")
         ent.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        web = ctk.CTkFrame(p, corner_radius=6, fg_color="#0A1214")
+        web = ctk.CTkFrame(p, corner_radius=8, fg_color="#1C1C1E")
         web.pack(fill="both", expand=True, padx=10, pady=(2, 10))
 
         self._html = HtmlFrame(web, horizontal_scrollbar="auto")
@@ -1551,48 +1616,33 @@ class VAApp(ctk.CTk):
             raw = self._b_url.get().strip()
             if not raw:
                 return
-            url = self._to_url(raw)
+            url = self._to_url_ddg(raw)
             self._b_url.set(raw)
             self._html.load_website(url)
-            self.status.append(f"Browser → {raw[:50]}")
 
         self._btn(nav, "Go", go, True, 56)
         self._btn(nav, "◀", lambda: self._safe(self._html.go_back), w=38)
         self._btn(nav, "▶", lambda: self._safe(self._html.go_forward), w=38)
         self._btn(nav, "⟳", lambda: self._safe(self._html.reload), w=38)
-        self._btn(nav, "🎙", lambda: self.voice.activate(), w=38)
 
-        # Start on DuckDuckGo homepage (lightweight, renders well)
-        self._html.load_website("https://html.duckduckgo.com/")
+        self._html.load_website(start_url)
         ent.bind("<Return>", go)
         ent.focus_set()
 
-    def _to_url(self, text):
-        """Smart URL/search detection."""
+    @staticmethod
+    def _to_url_ddg(text):
+        """URL/search for embedded browser (DuckDuckGo HTML-lite)."""
         text = text.strip()
-        # Already a full URL
         if text.startswith(("http://", "https://")):
             return text
-        # Looks like a domain name (has dot, no spaces)
         if "." in text and " " not in text:
             return "https://" + text
-        # Everything else — search with selected engine
-        engine = getattr(self, '_b_engine', None)
-        name = engine.get() if engine else "DuckDuckGo"
-        base = self.SEARCH_ENGINES.get(name, self.SEARCH_ENGINES["DuckDuckGo"])
-        return base + text.replace(" ", "+")
+        return "https://html.duckduckgo.com/html/?q=" + text.replace(" ", "+")
 
     def _browser_search(self, query):
         if not query:
             return
-        if HtmlFrame is None:
-            self.toast.show("Browser not available (tkinterweb)")
-            return
-        self.show_browser()
-        url = self._to_url(query)
-        self._b_url.set(query)
-        self.after(400, lambda: self._html.load_website(url))
-        self.status.append(f"Searching: {query[:50]}")
+        self.show_browser(search_query=query)
 
     # ═══════════════════════════════════════
     #  Translate
@@ -1604,7 +1654,7 @@ class VAApp(ctk.CTk):
 
         top = ctk.CTkFrame(p, fg_color="transparent")
         top.pack(fill="x", padx=10, pady=(8, 4))
-        ctk.CTkLabel(top, text="Target:", font=("Consolas", 12),
+        ctk.CTkLabel(top, text="Target:", font=(FONT, 12),
                       text_color=TXT).pack(side="left", padx=(0, 6))
 
         langs = ["Japanese", "Spanish", "French", "Korean", "German", "Chinese"]
@@ -1613,14 +1663,14 @@ class VAApp(ctk.CTk):
                            button_color=CD, button_hover_color=C,
                            text_color=TXT).pack(side="left")
 
-        src = ctk.CTkTextbox(p, height=120, font=("Consolas", 13),
-                              fg_color="#0A1214", text_color=TXT)
+        src = ctk.CTkTextbox(p, height=120, font=(FONT, 13),
+                              fg_color="#1C1C1E", text_color=TXT)
         src.pack(fill="x", padx=10, pady=(8, 4))
         src.insert("end", "Hello, how are you?")
         src.focus_set()
 
-        tgt = ctk.CTkTextbox(p, height=120, font=("Consolas", 13),
-                              fg_color="#0A1214", text_color=C)
+        tgt = ctk.CTkTextbox(p, height=120, font=(FONT, 13),
+                              fg_color="#1C1C1E", text_color=C)
         tgt.pack(fill="x", padx=10, pady=(4, 8))
         tgt.insert("end", "Translation appears here …")
         tgt.configure(state="disabled")
@@ -1658,7 +1708,7 @@ class VAApp(ctk.CTk):
     def show_settings(self):
         p = self._view("settings", "Settings", "Device + app configuration")
 
-        sw = dict(font=("Consolas", 13), text_color=TXT, progress_color=C)
+        sw = dict(font=(FONT, 13), text_color=TXT, progress_color=GRN)
 
         dm = ctk.CTkSwitch(p, text="Dark mode", **sw,
                             command=lambda: self._set_dark(dm))
@@ -1672,9 +1722,9 @@ class VAApp(ctk.CTk):
                             command=lambda: setattr(self, 'notifications_enabled', bool(nf.get())))
         nf.select(); nf.pack(anchor="w", padx=20, pady=6)
 
-        sl = dict(progress_color=C, button_color=C, button_hover_color="#00FFD5")
+        sl = dict(progress_color=C, button_color=TXT, button_hover_color=TXTD, fg_color=PNLE)
 
-        ctk.CTkLabel(p, text="AR transparency", font=("Consolas", 12),
+        ctk.CTkLabel(p, text="AR transparency", font=(FONT, 12),
                       text_color=TXTD).pack(anchor="w", padx=20, pady=(12, 2))
         asl = ctk.CTkSlider(p, from_=.3, to=1, number_of_steps=14, **sl,
                               command=lambda v: self._safe(
@@ -1682,15 +1732,15 @@ class VAApp(ctk.CTk):
         asl.set(0.92); asl.pack(fill="x", padx=20)
 
         # Microphone section
-        ctk.CTkFrame(p, fg_color=CD, height=1).pack(fill="x", padx=20, pady=(12, 6))
+        ctk.CTkFrame(p, fg_color="#2C2C2E", height=1).pack(fill="x", padx=20, pady=(12, 6))
 
-        mic_state = "✓ Ready" if self.voice.available else "✗ Not installed"
-        ctk.CTkLabel(p, text=f"🎙 Voice Control ({mic_state})",
-                      font=("Consolas", 14, "bold"),
-                      text_color=C).pack(anchor="w", padx=20)
+        mic_state = "Ready" if self.voice.available else "Not installed"
+        ctk.CTkLabel(p, text=f"Microphone — {mic_state}",
+                      font=(FONT, 14, "bold"),
+                      text_color=TXT).pack(anchor="w", padx=20)
 
-        mic_box = ctk.CTkTextbox(p, height=80, font=("Consolas", 11),
-                                  fg_color="#0A1214", text_color=TXT)
+        mic_box = ctk.CTkTextbox(p, height=80, font=(FONT, 11),
+                                  fg_color="#1C1C1E", text_color=TXT)
         mic_box.pack(fill="x", padx=20, pady=(4, 4))
 
         mics = VoiceController.list_microphones()
@@ -1709,13 +1759,13 @@ class VAApp(ctk.CTk):
             row = ctk.CTkFrame(p, fg_color="transparent")
             row.pack(fill="x", padx=20, pady=(2, 2))
 
-            ctk.CTkLabel(row, text="Device #:", font=("Consolas", 12),
+            ctk.CTkLabel(row, text="Device #:", font=(FONT, 12),
                           text_color=TXT).pack(side="left", padx=(0, 6))
 
             cur = self.voice.mic_index
             iv = ctk.StringVar(value=str(cur if cur is not None else 0))
-            ctk.CTkEntry(row, textvariable=iv, width=50, font=("Consolas", 13),
-                          fg_color=PNL, text_color=TXT, border_color=CD
+            ctk.CTkEntry(row, textvariable=iv, width=50, font=(FONT, 13),
+                          fg_color=PNL, text_color=TXT, border_color="#3A3A3C"
                           ).pack(side="left", padx=(0, 6))
 
             def set_mic():
@@ -1729,7 +1779,7 @@ class VAApp(ctk.CTk):
 
             self._btn(row, "Set", set_mic, True, 50)
 
-            test_lbl = ctk.CTkLabel(p, text="", font=("Consolas", 11), text_color=AMB)
+            test_lbl = ctk.CTkLabel(p, text="", font=(FONT, 11), text_color=AMB)
             test_lbl.pack(anchor="w", padx=20)
 
             def test_mic():
@@ -1765,9 +1815,9 @@ class VAApp(ctk.CTk):
 
         # Rotary section
         if self.rotary.available:
-            ctk.CTkFrame(p, fg_color=CD, height=1).pack(fill="x", padx=20, pady=(8, 6))
-            ctk.CTkLabel(p, text="🎛 Rotary Encoder: Connected",
-                          font=("Consolas", 12), text_color=C
+            ctk.CTkFrame(p, fg_color="#2C2C2E", height=1).pack(fill="x", padx=20, pady=(8, 6))
+            ctk.CTkLabel(p, text="Rotary Encoder — Connected",
+                          font=(FONT, 12), text_color=GRN
                           ).pack(anchor="w", padx=20)
 
         self.status.append("Opened Settings")
@@ -1782,7 +1832,7 @@ class VAApp(ctk.CTk):
 
     def show_sysinfo(self):
         p = self._view("sysinfo", "System Info", "Device diagnostics")
-        box = ctk.CTkTextbox(p, font=("Consolas", 12), fg_color="#0A1214", text_color=TXT)
+        box = ctk.CTkTextbox(p, font=(FONT, 12), fg_color="#1C1C1E", text_color=TXT)
         box.pack(fill="both", expand=True, padx=8, pady=8)
 
         info = [
@@ -1811,31 +1861,31 @@ class VAApp(ctk.CTk):
     # ═══════════════════════════════════════
 
     def show_power(self):
-        p = self._view("power", "Power", "Device power options")
+        p = self._view("power", "Power")
         w = ctk.CTkFrame(p, fg_color="transparent")
         w.pack(expand=True)
 
-        ctk.CTkButton(w, text="⏻  Power Off", fg_color=RED,
-                       hover_color="#FF1744", height=48,
-                       font=("Consolas", 15, "bold"), text_color="white",
+        ctk.CTkButton(w, text="Power Off", fg_color=RED,
+                       hover_color="#FF453A", height=44, corner_radius=12,
+                       font=(FONT, 15), text_color="white",
                        command=self._on_close
-                       ).pack(pady=10, padx=36, fill="x")
+                       ).pack(pady=8, padx=48, fill="x")
 
-        ctk.CTkButton(w, text="↻  Restart", fg_color=PNL,
-                       hover_color=CD, height=48,
-                       font=("Consolas", 15), text_color=TXT,
+        ctk.CTkButton(w, text="Restart", fg_color=PNLE,
+                       hover_color="#3A3A3C", height=44, corner_radius=12,
+                       font=(FONT, 15), text_color=TXT,
                        command=lambda: (self._on_close(),
                                         os.execl(sys.executable, sys.executable, *sys.argv))
-                       ).pack(pady=10, padx=36, fill="x")
+                       ).pack(pady=8, padx=48, fill="x")
 
-        ctk.CTkButton(w, text="ℹ  System Info", fg_color=PNL,
-                       hover_color=CD, height=40,
-                       font=("Consolas", 13), text_color=TXT,
-                       command=self.show_sysinfo).pack(pady=10, padx=36, fill="x")
+        ctk.CTkButton(w, text="System Info", fg_color=PNLE,
+                       hover_color="#3A3A3C", height=40, corner_radius=12,
+                       font=(FONT, 13), text_color=TXT,
+                       command=self.show_sysinfo).pack(pady=8, padx=48, fill="x")
 
         ctk.CTkButton(w, text="Cancel", fg_color="transparent",
-                       hover_color=PNL, height=36,
-                       font=("Consolas", 13), text_color=TXTD,
+                       hover_color=PNL, height=36, corner_radius=12,
+                       font=(FONT, 13), text_color=TXTD,
                        command=self._go_home).pack(pady=16)
 
     # ═══════════════════════════════════════
@@ -1845,8 +1895,8 @@ class VAApp(ctk.CTk):
     def show_bluetooth(self):
         p = self._view("bluetooth", "Bluetooth", "Nearby device scan (simulated)")
 
-        box = ctk.CTkTextbox(p, font=("Consolas", 13),
-                              fg_color="#0A1214", text_color=TXT)
+        box = ctk.CTkTextbox(p, font=(FONT, 13),
+                              fg_color="#1C1C1E", text_color=TXT)
         box.pack(fill="both", expand=True, padx=8, pady=8)
         box.insert("end", "Press Scan to search …\n")
         box.configure(state="disabled")
@@ -1875,8 +1925,8 @@ class VAApp(ctk.CTk):
         p = self._view("track", "Track / Location",
                         "IP geolocation demo · real device uses GPS")
 
-        box = ctk.CTkTextbox(p, font=("Consolas", 13),
-                              fg_color="#0A1214", text_color=TXT)
+        box = ctk.CTkTextbox(p, font=(FONT, 13),
+                              fg_color="#1C1C1E", text_color=TXT)
         box.pack(fill="both", expand=True, padx=8, pady=8)
         box.insert("end", "Press Refresh to locate …\n")
         box.configure(state="disabled")
@@ -1922,49 +1972,51 @@ class VAApp(ctk.CTk):
     # ═══════════════════════════════════════
 
     def show_music(self):
-        p = self._view("music", "Music", "Now playing · demo controls")
+        p = self._view("music", "Music")
 
-        ctk.CTkLabel(p, text="♫  Lofi Beats for Coding",
-                      font=("Consolas", 17, "bold"),
-                      text_color=C).pack(pady=(18, 2))
+        ctk.CTkLabel(p, text="Lofi Beats for Coding",
+                      font=(FONT, 18, "bold"),
+                      text_color=TXT).pack(pady=(24, 2))
         ctk.CTkLabel(p, text="Chillhop Records",
-                      font=("Consolas", 12), text_color=TXTD).pack(pady=(0, 14))
+                      font=(FONT, 12), text_color=TXTD).pack(pady=(0, 20))
 
         row = ctk.CTkFrame(p, fg_color="transparent")
         row.pack(pady=8)
-        for t in ["⏮ Prev", "▶ Play", "⏭ Next"]:
-            ctk.CTkButton(row, text=t, width=100, height=36, corner_radius=6,
-                           fg_color=PNLE, hover_color=CD,
-                           text_color=TXT, font=("Consolas", 13),
+        for t, sym in [("Prev", "⏮"), ("Play", "▶"), ("Next", "⏭")]:
+            ctk.CTkButton(row, text=sym, width=56, height=56, corner_radius=28,
+                           fg_color=PNLE, hover_color="#3A3A3C",
+                           text_color=TXT, font=(FONT, 18),
                            command=lambda x=t: self.status.append(f"Music: {x}")
-                           ).pack(side="left", padx=5)
+                           ).pack(side="left", padx=12)
 
-        ctk.CTkLabel(p, text="Volume", font=("Consolas", 11),
-                      text_color=TXTD).pack(pady=(18, 2))
+        ctk.CTkLabel(p, text="Volume", font=(FONT, 11),
+                      text_color=TXTD).pack(pady=(24, 4))
         vol = ctk.CTkSlider(p, from_=0, to=100, number_of_steps=10,
-                             progress_color=C, button_color=C)
-        vol.set(70); vol.pack(fill="x", padx=36)
+                             progress_color=C, button_color=TXT,
+                             button_hover_color=TXTD, fg_color=PNLE)
+        vol.set(70); vol.pack(fill="x", padx=48)
 
     # ═══════════════════════════════════════
     #  Shared helpers
     # ═══════════════════════════════════════
 
     def _btn(self, parent, text, cmd, primary=False, w=None):
-        kw = dict(text=text, command=cmd, corner_radius=6,
-                  font=("Consolas", 12, "bold") if primary else ("Consolas", 12),
-                  fg_color=CD if primary else PNL,
-                  hover_color=C if primary else PNLE,
-                  text_color="black" if primary else TXT)
+        kw = dict(text=text, command=cmd, corner_radius=20,
+                  font=(FONT, 12, "bold") if primary else (FONT, 12),
+                  fg_color=C if primary else PNLE,
+                  hover_color=CD if primary else "#3A3A3C",
+                  text_color="white")
         if w:
             kw["width"] = w
-        ctk.CTkButton(parent, **kw).pack(side="left", padx=3)
+        ctk.CTkButton(parent, **kw).pack(side="left", padx=4)
 
     def _btn_c(self, parent, text, cmd, primary=False):
-        ctk.CTkButton(parent, text=text, command=cmd, width=160, corner_radius=6,
-                       font=("Consolas", 13, "bold") if primary else ("Consolas", 13),
-                       fg_color=CD if primary else PNL,
-                       hover_color=C if primary else PNLE,
-                       text_color="black" if primary else TXT).pack(pady=(0, 8))
+        ctk.CTkButton(parent, text=text, command=cmd, width=180, height=38,
+                       corner_radius=20,
+                       font=(FONT, 13, "bold") if primary else (FONT, 13),
+                       fg_color=C if primary else PNLE,
+                       hover_color=CD if primary else "#3A3A3C",
+                       text_color="white").pack(pady=(0, 10))
 
     @staticmethod
     def _safe(fn):
