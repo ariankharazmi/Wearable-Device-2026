@@ -24,7 +24,7 @@ OS: Debian
 
 UI & Main Processing Stack: Custom UI & Processing Stacks built w/ Python
 
-Purpose: UCinci Senior Design Capstone 2026 & Microsoft Imagine Cup 2026
+Purpose: UCinci Senior Design Capstone 2026 & UC IT Expo 2026
 
 Strengths: Handsfree navigation, new medium for information delivery, and automation of tasks
 
@@ -35,7 +35,7 @@ Wearable Device 2026 serves as tool for improving workplace and occupational out
 ## Phase 1 Hardware
 * Radxa Zero 2 Pro
 * Sony micro-display
-* Rotary Encoder Controls for navigation & volume
+* TouchPad & Microphone Controls for navigation & volume
 * Camera Module
 * LED Status for video & photo capture indication
 
@@ -45,6 +45,8 @@ Wearable Device 2026 serves as tool for improving workplace and occupational out
 * API Plugin App
 * Voice Control
 * Photo & Video Capture
+* Web Browser
+* Gemini API Application
 
 ## Timeline
 * Sep 2024 - Idea
@@ -54,9 +56,10 @@ Wearable Device 2026 serves as tool for improving workplace and occupational out
 * Aug 2025-Sep 2025 - Further research is conducted, nearly all components sourced, Capstone course begins
 * Oct 2025 - Core software suite tested on hardware
 * Nov 2025 - Early MVP Prototype developed, demoed publicly
+* Dec 2025 - March 2026 - Building Dev Kit, Refining final software stack
 
 ## Capabilities
-Wearable Device 2026 can receive mobile phone notifications, serve information (such as alerts, schematics), and capture photos & video. Wearable Device 2026 can also utilize bluetooth features -- like file transfer, connecting to accessories, and more. Handsfree use, navigation, and automation means that users no longer need to reach into your pocket, open up a computer, or check their smartwatch for information. It all delivers via the high-resolution Sony Display that Wearable Device 2026 is equipped with. This will serve occupational uses well, such as factory workers seeing a schematic right in front of them, disaster responders getting critical alerts in their field-of-view, or even researchers using the device for education. Wearable Device 2026 is a purpose-driven device built to serve us, not serve us gimmicks. Wearable Device 2026 aims to be a truly useful device, and the best student-built wearable, all built with off-the-shelf parts. Wearable Device 2026 is being actively developed for University of Cincinnati's Senior Design Capstone 2026 round, and the Microsoft Imagine Cup 2026 International Competition.
+Wearable Device 2026 can receive mobile phone notifications, serve information (such as alerts, schematics), and capture photos & video. Wearable Device 2026 can also utilize bluetooth features -- like file transfer, connecting to accessories, and more. Handsfree use, navigation, and automation means that users no longer need to reach into your pocket, open up a computer, or check their smartwatch for information. It all delivers via the high-resolution Sony Display that Wearable Device 2026 is equipped with. This will serve occupational uses well, such as factory workers seeing a schematic right in front of them, disaster responders getting critical alerts in their field-of-view, or even researchers using the device for education. Wearable Device 2026 is a purpose-driven device built to serve us, not serve us gimmicks. Wearable Device 2026 aims to be a truly useful device, and the best student-built wearable, all built with off-the-shelf parts. Wearable Device 2026 is being actively developed for University of Cincinnati's Senior Design Capstone 2026 round, and the UC IT Expo 2026.
 
 ## Citation
 None...
