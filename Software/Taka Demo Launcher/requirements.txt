@@ -43,3 +43,8 @@ tqdm==4.67.1
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.5.0
+google-genai
+deep-translator
+pyttsx3
+python-dotenv
+RPi.GPIO; platform_system == "Linux"
