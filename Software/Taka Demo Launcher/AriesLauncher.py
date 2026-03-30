@@ -8,6 +8,7 @@ import logging
 import subprocess
 import tkinter as tk
 from datetime import datetime
+from urllib.parse import quote_plus
 
 import customtkinter as ctk
 from PIL import Image, ImageTk, ImageDraw, ImageFilter, ImageGrab
@@ -167,6 +168,24 @@ for _f in ("SF Mono", "Menlo", FONT):
 
 SCALE_DROP = 0.14
 ALPHA_DROP = 0.22
+
+SITE_ALIASES = {
+    "university of cincinnati": "https://www.uc.edu",
+    "uc": "https://www.uc.edu",
+    "google": "https://www.google.com",
+    "youtube": "https://www.youtube.com",
+    "gmail": "https://mail.google.com",
+    "wikipedia": "https://www.wikipedia.org",
+    "amazon": "https://www.amazon.com",
+    "facebook": "https://www.facebook.com",
+    "instagram": "https://www.instagram.com",
+    "twitter": "https://x.com",
+    "x": "https://x.com",
+    "linkedin": "https://www.linkedin.com",
+    "netflix": "https://www.netflix.com",
+    "reddit": "https://www.reddit.com",
+    "github": "https://www.github.com",
+}
 
 
 # ═══════════════════════════════════════
@@ -764,6 +783,202 @@ class CoverFlow:
                 break
 
 
+class TouchKeyboard:
+    """Virtual keyboard rendered in its own top-level window for reliability."""
+
+    TOK_SPACE = "__SPACE__"
+    TOK_BACK = "__BACKSPACE__"
+    TOK_ENTER = "__ENTER__"
+
+    LAYOUT = [
+        ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
+        ["a", "s", "d", "f", "g", "h", "j", "k", "l", TOK_BACK],
+        ["z", "x", "c", "v", "b", "n", "m", TOK_ENTER],
+        [TOK_SPACE],
+    ]
+
+    def __init__(self, app):
+        self.app = app
+        self.window = None
+        self.visible = False
+        self.sel_row = 0
+        self.sel_col = 0
+        self._buttons = []
+        self._preview_var = None
+        self._flash_token = None
+        self._flash_after = None
+
+    def ensure(self):
+        if self.window is not None:
+            return
+
+        self.window = tk.Toplevel(self.app)
+        self.window.withdraw()
+        self.window.overrideredirect(True)
+        self.window.transient(self.app)
+        self.window.configure(bg="#050506", bd=1, highlightthickness=1, highlightbackground="#2C2C2E")
+
+        shell = ctk.CTkFrame(self.window, fg_color="#050506", corner_radius=0)
+        shell.pack(fill="both", expand=True)
+        shell.grid_columnconfigure(0, weight=1)
+
+        hdr = ctk.CTkFrame(shell, fg_color="transparent")
+        hdr.grid(row=0, column=0, sticky="ew", padx=12, pady=(4, 2))
+        ctk.CTkLabel(
+            hdr,
+            text="Keyboard",
+            font=(FONT, 13, "bold"),
+            text_color=TXT,
+        ).pack(side="left")
+
+        self._preview_var = tk.StringVar(value="")
+        preview = ctk.CTkFrame(shell, corner_radius=10, fg_color="#101013")
+        preview.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 4))
+        preview.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            preview,
+            textvariable=self._preview_var,
+            font=(FONT, 12),
+            text_color=TXTD,
+            justify="left",
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=10, pady=6)
+
+        keys = ctk.CTkFrame(shell, fg_color="transparent")
+        keys.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 8))
+        shell.grid_rowconfigure(2, weight=1)
+        for col in range(10):
+            keys.grid_columnconfigure(col, weight=1, uniform="vk")
+
+        self._buttons = []
+        for r, row_tokens in enumerate(self.LAYOUT):
+            row_buttons = []
+            col = 0
+            for token in row_tokens:
+                span = 1
+                if token == self.TOK_SPACE:
+                    span = 10
+                elif token == self.TOK_ENTER:
+                    span = 3
+                elif token == self.TOK_BACK:
+                    span = 1
+                btn = ctk.CTkButton(
+                    keys,
+                    text=self._label(token),
+                    command=lambda t=token: self.press(t),
+                    height=38,
+                    corner_radius=7,
+                    border_width=1,
+                    border_color="#2A2A2E",
+                    font=(FONT, 10, "bold") if token.startswith("__") else (FONT, 11),
+                    fg_color="#0A0A0B",
+                    hover_color="#171719",
+                    text_color=TXT,
+                )
+                btn.grid(row=r, column=col, columnspan=span, padx=2, pady=2, sticky="nsew")
+                row_buttons.append(btn)
+                col += span
+            self._buttons.append(row_buttons)
+
+    def _label(self, token):
+        if token == self.TOK_SPACE:
+            return "Space"
+        if token == self.TOK_BACK:
+            return "Backspace"
+        if token == self.TOK_ENTER:
+            return "Enter"
+        return token
+
+    def show(self):
+        self.ensure()
+        self.visible = True
+        self.sel_row = 0
+        self.sel_col = 0
+        self._position()
+        self.window.deiconify()
+        self.window.lift()
+        self.window.attributes("-topmost", True)
+        self.refresh()
+
+    def hide(self):
+        if self.window is not None:
+            self.window.withdraw()
+        self.visible = False
+
+    def _position(self):
+        self.app.update_idletasks()
+        x = self.app.winfo_rootx()
+        y = self.app.winfo_rooty() + self.app.winfo_height() - 210
+        w = max(self.app.winfo_width(), WIDTH)
+        h = 210
+        self.window.geometry(f"{w}x{h}+{x}+{y}")
+
+    def refresh(self):
+        if self.window is None:
+            return
+        self._position()
+        if self._preview_var is not None:
+            self._preview_var.set(self.app._active_input_text())
+        for r, row_buttons in enumerate(self._buttons):
+            for c, btn in enumerate(row_buttons):
+                token = self.LAYOUT[r][c]
+                selected = r == self.sel_row and c == self.sel_col
+                flashing = token == self._flash_token
+                btn.configure(
+                    text=self._label(token),
+                    fg_color=AMB if flashing else (C if selected else "#0A0A0B"),
+                    hover_color=AMB if flashing else (CD if selected else "#171719"),
+                )
+
+    def move(self, dx=0, dy=0):
+        if not self.visible:
+            return
+        if dy:
+            self.sel_row = max(0, min(len(self.LAYOUT) - 1, self.sel_row + dy))
+            self.sel_col = min(self.sel_col, len(self.LAYOUT[self.sel_row]) - 1)
+        if dx:
+            self.sel_col = max(0, min(len(self.LAYOUT[self.sel_row]) - 1, self.sel_col + dx))
+        self.refresh()
+
+    def activate(self):
+        if not self.visible:
+            return
+        self.press(self.LAYOUT[self.sel_row][self.sel_col])
+
+    def press(self, token):
+        self.flash(token, persist_ms=140)
+        self.app._handle_touch_key(token)
+        self.refresh()
+
+    def flash(self, token, persist_ms=140):
+        if not self.visible:
+            return
+        pos = self._find_token(token)
+        if pos is not None:
+            self.sel_row, self.sel_col = pos
+        self._flash_token = token
+        if self._flash_after and self.window is not None:
+            try:
+                self.window.after_cancel(self._flash_after)
+            except Exception:
+                pass
+        if self.window is not None:
+            self._flash_after = self.window.after(persist_ms, self._clear_flash)
+        self.refresh()
+
+    def _clear_flash(self):
+        self._flash_after = None
+        self._flash_token = None
+        self.refresh()
+
+    def _find_token(self, token):
+        for r, row in enumerate(self.LAYOUT):
+            for c, candidate in enumerate(row):
+                if candidate == token:
+                    return (r, c)
+        return None
+
+
 # ═══════════════════════════════════════
 #  Main App
 # ═══════════════════════════════════════
@@ -802,7 +1017,7 @@ class VAApp(ctk.CTk):
         self.cv.create_text(
             WIDTH // 2, HEIGHT - 24, anchor="s", fill="#48484A",
             font=(FONT, 10),
-            text='V Voice    S Screenshot    T Timer    Enter Open    Esc Back')
+            text='S Screenshot    T Timer    Enter Open    Esc Back')
 
         # Overlay frame — raw tk.Frame to avoid ghost rectangle
         self._vf = None
@@ -863,6 +1078,9 @@ class VAApp(ctk.CTk):
         # Browser refs
         self._html = None
         self._b_url = None
+        self._active_input = None
+        self._active_submit = None
+        self._touch_keyboard = TouchKeyboard(self)
 
         # Handlers
         self._handlers = {
@@ -890,6 +1108,8 @@ class VAApp(ctk.CTk):
         # Keys — V, S, T work globally
         self.bind("<Left>",   self._k_left)
         self.bind("<Right>",  self._k_right)
+        self.bind("<Up>",     self._k_up)
+        self.bind("<Down>",   self._k_down)
         self.bind("<Return>", self._k_enter)
         self.bind("<Escape>", self._k_esc)
         self.bind("<v>",      self._k_v)
@@ -898,6 +1118,7 @@ class VAApp(ctk.CTk):
         self.bind("<S>",      self._k_s)
         self.bind("<t>",      self._k_t)
         self.bind("<T>",      self._k_t)
+        self.bind_all("<KeyPress>", self._k_keypress, add="+")
         self.bind_all("<MouseWheel>", self._k_wheel)
         self.bind_all("<Button-4>", lambda e: self._nav(+1))
         self.bind_all("<Button-5>", lambda e: self._nav(-1))
@@ -956,19 +1177,15 @@ class VAApp(ctk.CTk):
 
     def _rotary_rotate(self, direction):
         """GPIO thread → UI thread: rotate coverflow."""
-        self.after(0, lambda: self._nav(direction))
+        self.after(0, lambda: self._touchpad_swipe("right" if direction > 0 else "left"))
 
     def _rotary_click(self):
         """GPIO thread → UI thread: select app, or voice if browser open."""
-        if self._browser_is_open():
-            # Browser window has focus — rotary click triggers voice instead
-            self.after(0, lambda: self.voice.activate())
-        else:
-            self.after(0, self._open_sel)
+        self.after(0, self._touchpad_tap)
 
     def _rotary_long(self):
         """GPIO thread → UI thread: go home."""
-        self.after(0, self._go_home)
+        self.after(0, self._touchpad_long_press)
 
     # ── HUD chrome ──
 
@@ -1009,19 +1226,35 @@ class VAApp(ctk.CTk):
         return False
 
     def _k_left(self, e):
-        if self.current_view == "home" and not self._typing():
+        if self._touch_keyboard.visible:
+            self._touchpad_swipe("left")
+        elif self.current_view == "home" and not self._typing():
             self._nav(-1)
 
     def _k_right(self, e):
-        if self.current_view == "home" and not self._typing():
+        if self._touch_keyboard.visible:
+            self._touchpad_swipe("right")
+        elif self.current_view == "home" and not self._typing():
             self._nav(+1)
 
+    def _k_up(self, e):
+        if self._touch_keyboard.visible:
+            self._touchpad_swipe("up")
+
+    def _k_down(self, e):
+        if self._touch_keyboard.visible:
+            self._touchpad_swipe("down")
+
     def _k_enter(self, e):
-        if self.current_view == "home" and not self._typing():
+        if self._touch_keyboard.visible:
+            self._touchpad_tap()
+        elif self.current_view == "home" and not self._typing():
             self._open_sel()
 
     def _k_esc(self, e):
-        if self.current_view != "home":
+        if self._touch_keyboard.visible:
+            self._hide_touch_keyboard()
+        elif self.current_view != "home":
             self._go_home()
 
     def _k_wheel(self, e):
@@ -1040,6 +1273,23 @@ class VAApp(ctk.CTk):
     def _k_t(self, e):
         if not self._typing():
             self._toggle_timer()
+
+    def _k_keypress(self, e):
+        if not self._touch_keyboard.visible or not self._active_input_alive():
+            return
+
+        token = None
+        if e.keysym in ("BackSpace",):
+            token = TouchKeyboard.TOK_BACK
+        elif e.keysym in ("Return", "KP_Enter"):
+            token = TouchKeyboard.TOK_ENTER
+        elif e.keysym == "space":
+            token = TouchKeyboard.TOK_SPACE
+        elif e.char and len(e.char) == 1 and e.char.isalpha():
+            token = e.char.lower()
+
+        if token is not None:
+            self.after(0, lambda t=token: self._touch_keyboard.flash(t, persist_ms=180))
 
     # ═══════════════════════════════════════
     #  Timer / Stopwatch
@@ -1078,11 +1328,38 @@ class VAApp(ctk.CTk):
     # ═══════════════════════════════════════
 
     def _voice_route(self, cmd):
+        if self._active_input_alive():
+            for prefix in ("type ", "dictate ", "enter text "):
+                if cmd.startswith(prefix):
+                    self._insert_into_active_input(cmd[len(prefix):])
+                    return
+            if cmd in {"backspace", "delete"}:
+                self._backspace_active_input()
+                return
+            if cmd in {"clear text", "clear field"}:
+                self._clear_active_input()
+                return
+            if cmd in {"submit", "send", "search now", "go now"}:
+                self._submit_active_input()
+                return
+
         # Strip common prefixes so "open camera" → "camera"
         for prefix in ("open ", "go to ", "launch ", "start ", "show "):
             if cmd.startswith(prefix):
                 cmd = cmd[len(prefix):]
                 break
+
+        # Direct website open — "open up X website" / "go to X site"
+        for suffix in (" website", " site"):
+            if cmd.endswith(suffix):
+                target = cmd[:-len(suffix)].strip()
+                for prefix in ("open up ", "open ", "go to ", "launch ", "start ", "show "):
+                    if target.startswith(prefix):
+                        target = target[len(prefix):].strip()
+                        break
+                if target:
+                    self._browser_open_website(target)
+                    return
 
         # Handle compound "browser and search X" / "browser search X"
         for sep in ("and search for ", "and search ", "search for ", "search "):
@@ -1183,6 +1460,7 @@ class VAApp(ctk.CTk):
         self.current_view = "home"
         self._stop_camera()
         self._close_browser()
+        self._hide_touch_keyboard()
         if self._vf_visible and self._vf:
             self._vf.place_forget()
             self._vf_visible = False
@@ -1199,6 +1477,9 @@ class VAApp(ctk.CTk):
 
     def _clear_vf(self):
         self._stop_camera()
+        self._active_input = None
+        self._active_submit = None
+        self._hide_touch_keyboard()
         if self._vf:
             for w in self._vf.winfo_children():
                 try:
@@ -1222,7 +1503,7 @@ class VAApp(ctk.CTk):
         top.pack_propagate(False)
         ctk.CTkLabel(top, text=f"‹  {title}", font=(FONT, 18),
                       text_color=C).pack(side="left", padx=24, pady=12)
-        ctk.CTkLabel(top, text="Esc back  ·  V voice",
+        ctk.CTkLabel(top, text="Esc back",
                       font=(FONT, 10),
                       text_color="#48484A").pack(side="right", padx=24, pady=12)
 
@@ -1243,6 +1524,149 @@ class VAApp(ctk.CTk):
                           font=(FONT, 14), text_color=TXTD,
                           justify="center").place(relx=.5, rely=.5, anchor="center")
         return panel
+
+    def _touchpad_swipe(self, direction):
+        if self._touch_keyboard.visible:
+            moves = {
+                "left": (-1, 0),
+                "right": (1, 0),
+                "up": (0, -1),
+                "down": (0, 1),
+            }
+            dx, dy = moves.get(direction, (0, 0))
+            self._touch_keyboard.move(dx=dx, dy=dy)
+            return
+
+        if self.current_view == "home":
+            if direction == "left":
+                self._nav(-1)
+            elif direction == "right":
+                self._nav(+1)
+
+    def _touchpad_tap(self):
+        if self._touch_keyboard.visible:
+            self._touch_keyboard.activate()
+            return
+        elif self._typing():
+            self._show_touch_keyboard()
+        elif self._browser_is_open():
+            self.voice.activate()
+        elif self.current_view == "home":
+            self._open_sel()
+
+    def _touchpad_long_press(self):
+        self._go_home()
+
+    def _register_text_input(self, widget, submit_callback=None):
+        widget.bind("<FocusIn>", lambda e, w=widget, cb=submit_callback: self._activate_text_input(w, cb), add="+")
+        widget.bind("<Button-1>", lambda e, w=widget, cb=submit_callback: self.after(0, lambda: self._activate_text_input(w, cb)), add="+")
+
+    def _activate_text_input(self, widget, submit_callback=None):
+        self._active_input = widget
+        self._active_submit = submit_callback
+        self._show_touch_keyboard()
+
+    def _active_input_alive(self):
+        if self._active_input is None:
+            return False
+        try:
+            return bool(self._active_input.winfo_exists())
+        except Exception:
+            return False
+
+    def _show_touch_keyboard(self):
+        if self.current_view == "home" or not self._active_input_alive():
+            return
+        self._touch_keyboard.show()
+        self._touch_keyboard.refresh()
+
+    def _hide_touch_keyboard(self):
+        self._touch_keyboard.hide()
+
+    def _handle_touch_key(self, token):
+        if token == TouchKeyboard.TOK_SPACE:
+            self._insert_into_active_input(" ")
+            return
+        if token == TouchKeyboard.TOK_BACK:
+            self._backspace_active_input()
+            return
+        if token == TouchKeyboard.TOK_ENTER:
+            self._submit_active_input()
+            return
+
+        self._insert_into_active_input(token)
+
+    def _insert_into_active_input(self, text):
+        if not self._active_input_alive():
+            self.toast.show("Select a text field first")
+            return
+        w = self._active_input
+        try:
+            if isinstance(w, (ctk.CTkEntry, tk.Entry)):
+                w.insert(w.index("insert"), text)
+            else:
+                w.insert("insert", text)
+            w.focus_set()
+            if self._touch_keyboard.visible:
+                self._touch_keyboard.refresh()
+        except Exception as exc:
+            self.toast.show(f"Typing failed: {exc}")
+
+    def _backspace_active_input(self):
+        if not self._active_input_alive():
+            return
+        w = self._active_input
+        try:
+            if isinstance(w, (ctk.CTkEntry, tk.Entry)):
+                idx = int(w.index("insert"))
+                if idx > 0:
+                    w.delete(idx - 1, idx)
+            else:
+                idx = w.index("insert")
+                if idx != "1.0":
+                    w.delete(f"{idx} -1c", idx)
+            w.focus_set()
+            if self._touch_keyboard.visible:
+                self._touch_keyboard.refresh()
+        except Exception:
+            pass
+
+    def _clear_active_input(self):
+        if not self._active_input_alive():
+            return
+        w = self._active_input
+        try:
+            if isinstance(w, (ctk.CTkEntry, tk.Entry)):
+                w.delete(0, "end")
+            else:
+                w.delete("1.0", "end")
+            w.focus_set()
+            if self._touch_keyboard.visible:
+                self._touch_keyboard.refresh()
+        except Exception:
+            pass
+
+    def _submit_active_input(self):
+        if self._active_submit:
+            self._active_submit()
+            self._hide_touch_keyboard()
+            return
+        if self._active_input_alive():
+            try:
+                self._active_input.event_generate("<Return>")
+            except Exception:
+                pass
+        self._hide_touch_keyboard()
+
+    def _active_input_text(self):
+        if not self._active_input_alive():
+            return ""
+        try:
+            if isinstance(self._active_input, (ctk.CTkEntry, tk.Entry)):
+                return self._active_input.get()
+            return self._active_input.get("1.0", "end").strip()
+        except Exception:
+            return ""
 
     def _generic(self, label):
         self._view(f"app:{label}", label,
@@ -1305,6 +1729,7 @@ class VAApp(ctk.CTk):
 
         self._btn(bar, "Send", send, True, 72)
         ent.bind("<Return>", send)
+        self._register_text_input(ent, send)
         ent.focus_set()
 
     def _assistant_reply(self, msg, hist):
@@ -1578,66 +2003,115 @@ class VAApp(ctk.CTk):
             self.toast.show("Browser closed")
 
     def show_browser(self, search_query=None):
-        # Primary: pywebview subprocess — full JavaScript
+        if search_query:
+            url = "https://www.google.com/search?q=" + quote_plus(search_query)
+            self._open_external_browser(url)
+            return
+
+        p = self._view("browser", "Browser")
+
+        nav = ctk.CTkFrame(p, fg_color="transparent")
+        nav.pack(fill="x", padx=10, pady=(14, 8))
+
+        self._b_url = ctk.StringVar(value="")
+        ent = ctk.CTkEntry(
+            nav,
+            textvariable=self._b_url,
+            placeholder_text="Search Google or enter URL…",
+            font=(FONT, 15),
+            fg_color=PNL,
+            text_color=TXT,
+            border_color=C,
+            height=42,
+        )
+        ent.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        def go(_=None):
+            raw = self._b_url.get().strip()
+            if not raw:
+                self._open_external_browser("https://www.google.com")
+                return
+            self._open_external_browser(self._to_google_url(raw))
+
+        self._btn(nav, "Open", go, True, 72)
+        self._btn(nav, "Home", lambda: self._open_external_browser("https://www.google.com"), w=72)
+
+        card = ctk.CTkFrame(p, corner_radius=14, fg_color="#151518")
+        card.pack(fill="both", expand=True, padx=10, pady=(6, 10))
+        ctk.CTkFrame(card, fg_color="transparent").place(relx=.5, rely=.42, anchor="center")
+        ctk.CTkLabel(
+            card,
+            text="",
+            font=(FONT, 1),
+            text_color="#151518",
+            justify="center",
+            wraplength=1,
+        ).place(relx=.5, rely=.7, anchor="center")
+
+        ent.bind("<Return>", go)
+        self._register_text_input(ent, go)
+        self._activate_text_input(ent, go)
+        ent.focus_force()
+        self.after(50, self._show_touch_keyboard)
+
+    def _open_external_browser(self, url):
         try:
             import webview as _wv_check
             has_pywebview = True
         except ImportError:
             has_pywebview = False
 
-        if has_pywebview:
-            # Google works in pywebview (full JS engine)
-            url = "https://www.google.com"
-            if search_query:
-                url = "https://www.google.com/search?q=" + search_query.replace(" ", "+")
+        if not has_pywebview:
+            p = self._view("browser", "Browser")
+            ctk.CTkLabel(p, text="No browser available.\n\n"
+                          "pip install pywebview   (full JS)\n"
+                          "pip install tkinterweb  (basic HTML)",
+                          font=(FONT, 13), text_color=TXTD,
+                          justify="center").place(relx=.5, rely=.5, anchor="center")
+            return
 
-            if self._browser_is_open():
-                self.toast.show("Browser already open")
-                return
+        if self._browser_is_open():
+            self.toast.show("Full browser already open")
+            return
 
-            self.toast.show("Opening browser…", 1500)
-            self.status.append(f"Browser → {search_query or 'Google'}")
-
-            script = (
-                "import webview, sys; "
-                "webview.create_window('Aries Browser', sys.argv[1], "
-                f"width={WIDTH}, height={HEIGHT}, confirm_close=False); "
-                "webview.start()"
+        self.toast.show("Opening full browser…", 1500)
+        self.status.append("Browser → external full web")
+        win_x = self.winfo_rootx()
+        win_y = self.winfo_rooty()
+        script = (
+            "import webview, sys; "
+            "webview.create_window('Aries Browser', sys.argv[1], "
+            f"width={WIDTH}, height={HEIGHT}, x={win_x}, y={win_y}, "
+            "frameless=True, easy_drag=False, resizable=False, confirm_close=False); "
+            "webview.start()"
+        )
+        try:
+            self._browser_proc = subprocess.Popen(
+                [sys.executable, "-c", script, url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
-            try:
-                self._browser_proc = subprocess.Popen(
-                    [sys.executable, "-c", script, url],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                def _watch():
-                    if self._browser_proc:
-                        self._browser_proc.wait()
-                    self.after(0, lambda: self.status.append("Browser closed"))
-                    self._browser_proc = None
-                threading.Thread(target=_watch, daemon=True).start()
-            except Exception as exc:
-                msg = str(exc)
-                self.toast.show(f"Browser failed: {msg}")
-            return
+            def _watch():
+                if self._browser_proc:
+                    self._browser_proc.wait()
+                self.after(0, lambda: self.status.append("Browser closed"))
+                self._browser_proc = None
+            threading.Thread(target=_watch, daemon=True).start()
+        except Exception as exc:
+            self.toast.show(f"Browser failed: {exc}")
 
-        # Fallback: tkinterweb embedded — DuckDuckGo (no JS needed)
-        if HtmlFrame is not None:
-            ddg_url = "https://html.duckduckgo.com/"
-            if search_query:
-                ddg_url = "https://html.duckduckgo.com/html/?q=" + search_query.replace(" ", "+")
-            self._show_embedded_browser(ddg_url)
-            return
+    @staticmethod
+    def _to_google_url(text):
+        text = text.strip()
+        if not text:
+            return "https://www.google.com"
+        if text.startswith(("http://", "https://")):
+            return text
+        if "." in text and " " not in text:
+            return "https://" + text
+        return "https://www.google.com/search?q=" + quote_plus(text)
 
-        # Nothing available
-        p = self._view("browser", "Browser")
-        ctk.CTkLabel(p, text="No browser available.\n\n"
-                      "pip install pywebview   (full JS)\n"
-                      "pip install tkinterweb  (basic HTML)",
-                      font=(FONT, 13), text_color=TXTD,
-                      justify="center").place(relx=.5, rely=.5, anchor="center")
-
-    def _show_embedded_browser(self, start_url):
+    def _show_embedded_browser(self, start_url, external_url=None):
         """Fallback embedded browser — no JavaScript."""
         p = self._view("browser", "Browser")
 
@@ -1669,9 +2143,13 @@ class VAApp(ctk.CTk):
         self._btn(nav, "◀", lambda: self._safe(self._html.go_back), w=38)
         self._btn(nav, "▶", lambda: self._safe(self._html.go_forward), w=38)
         self._btn(nav, "⟳", lambda: self._safe(self._html.reload), w=38)
+        if external_url:
+            self._btn(nav, "Full", lambda u=external_url: self._open_external_browser(u), w=56)
+        self._btn(nav, "Close", self._go_home, w=60)
 
         self._html.load_website(start_url)
         ent.bind("<Return>", go)
+        self._register_text_input(ent, go)
         ent.focus_set()
 
     @staticmethod
@@ -1688,6 +2166,57 @@ class VAApp(ctk.CTk):
         if not query:
             return
         self.show_browser(search_query=query)
+
+    def _browser_open_website(self, target):
+        if not target:
+            return
+        url = self._to_direct_website_url(target)
+        self.status.append(f"Website → {target}")
+        self.toast.show(f"Opening {target}…", 1500)
+        self._open_external_browser(url)
+
+    @staticmethod
+    def _to_direct_website_url(text):
+        text = text.strip().lower()
+        if not text:
+            return "https://www.google.com"
+        if text.startswith(("http://", "https://")):
+            return text
+
+        text = text.replace("'s", "").replace(" official", "").strip()
+        if text in SITE_ALIASES:
+            return SITE_ALIASES[text]
+
+        words = [w for w in text.split() if w not in {"the", "a", "an", "website", "site", "homepage", "home"}]
+        if not words:
+            return "https://www.google.com"
+
+        joined = "".join(ch for ch in "".join(words) if ch.isalnum())
+        dashed = "-".join("".join(ch for ch in w if ch.isalnum()) for w in words if any(ch.isalnum() for ch in w))
+
+        candidates = []
+        if "university" in words or "college" in words or "school" in words:
+            if joined:
+                candidates.append(f"https://www.{joined}.edu")
+            if dashed:
+                candidates.append(f"https://www.{dashed}.edu")
+        if joined:
+            candidates.append(f"https://www.{joined}.com")
+        if dashed:
+            candidates.append(f"https://www.{dashed}.com")
+
+        if candidates:
+            return candidates[0]
+        return "https://html.duckduckgo.com/html/?q=" + quote_plus(text)
+
+    @staticmethod
+    def _to_google_lucky_url(text):
+        text = text.strip()
+        if not text:
+            return "https://www.google.com"
+        if text.startswith(("http://", "https://")):
+            return text
+        return "https://www.google.com/search?btnI=I&q=" + quote_plus(text)
 
     # ═══════════════════════════════════════
     #  Translate
@@ -1728,6 +2257,7 @@ class VAApp(ctk.CTk):
             tgt.insert("end", res)
             tgt.configure(state="disabled")
 
+        self._register_text_input(src, go)
         self._btn_c(p, "Translate", go, True)
 
     def _translate(self, text, lang):
