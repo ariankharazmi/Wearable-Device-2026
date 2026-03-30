@@ -37,6 +37,12 @@ try:
     from google import genai
 except Exception:
     genai = None
+
+try:
+    import pyttsx3
+except Exception:
+    pyttsx3 = None
+    
 try:
     from deep_translator import GoogleTranslator
 except Exception:
@@ -51,6 +57,7 @@ try:
     import RPi.GPIO as GPIO
 except Exception:
     GPIO = None
+
 
 # Logging
 
@@ -860,6 +867,22 @@ class VAApp(ctk.CTk):
         else:
             self.log.warning("google-genai SDK not installed")
 
+        # ── Text-to-speech ──
+        self.tts_engine = None
+        self.tts_enabled = True
+
+        if pyttsx3:
+            try:
+                self.tts_engine = pyttsx3.init()
+                self.tts_engine.setProperty("rate", 185)
+                self.tts_engine.setProperty("volume", 1.0)
+                self.log.info("TTS engine initialized")
+            except Exception as e:
+                self.log.warning("TTS init failed: %s", e)
+                self.tts_engine = None
+        else:
+            self.log.warning("pyttsx3 not installed")
+
         # Browser refs
         self._html = None
         self._b_url = None
@@ -1245,71 +1268,252 @@ class VAApp(ctk.CTk):
     # ═══════════════════════════════════════
 
     def show_assistant(self):
-        p = self._view("assistant", "Assistant",
-                       "Cloud AI assistant powered by Gemini.")
+        p = self._view("assistant", "Gemini",
+                       "AI assistant interface")
+
+        # Background glow / header panel
+               # HUD header
+        header = ctk.CTkFrame(
+            p,
+            fg_color="#061018",
+            corner_radius=18,
+            border_color="#00F5FF",
+            border_width=1
+        )
+        header.pack(fill="x", padx=12, pady=(10, 10))
+
+        top_strip = ctk.CTkFrame(header, fg_color="transparent")
+        top_strip.pack(fill="x", padx=14, pady=(12, 6))
+
+        ctk.CTkLabel(
+            top_strip,
+            text="◉ ARIES // GEMINI CORE",
+            font=("Consolas", 22, "bold"),
+            text_color=C
+        ).pack(side="left")
+
+        online = bool(getattr(self, "gemini_client", None))
+        status_text = "ONLINE" if online else "LOCAL MODE"
+        status_color = "#00F5FF" if online else "#FF9B3D"
+
+        self._assistant_status_chip = ctk.CTkLabel(
+            top_strip,
+            text=status_text,
+            font=("Consolas", 11, "bold"),
+            text_color="#021014",
+            fg_color=status_color,
+            corner_radius=12,
+            padx=12,
+            pady=5
+        )
+        self._assistant_status_chip.pack(side="right")
+
+        ctk.CTkLabel(
+            header,
+            text="Gemini 2.5 flash assistant • Aries glasses HUD • live reasoning interface",
+            font=("Consolas", 11),
+            text_color=TXTD
+        ).pack(anchor="w", padx=14, pady=(0, 4))
+
+        ctk.CTkLabel(
+            header,
+            text="VOICE [V]  •  TYPE  •  CLOUD RESPONSE  •  TTS PLAYBACK",
+            font=("Consolas", 10, "bold"),
+            text_color="#5BC9D7"
+        ).pack(anchor="w", padx=14, pady=(0, 12))
+
+            # Live system status row
+        status_row = ctk.CTkFrame(
+            p,
+            fg_color="#07131A",
+            corner_radius=14,
+            border_color="#123844",
+            border_width=1
+        )
+        status_row.pack(fill="x", padx=12, pady=(0, 10))
+
+        self._mic_status_lbl = ctk.CTkLabel(
+            status_row,
+            text="MIC: STANDBY",
+            font=("Consolas", 11, "bold"),
+            text_color="#7EE7F7"
+        )
+        self._mic_status_lbl.pack(side="left", padx=14, pady=10)
+
+        self._thinking_status_lbl = ctk.CTkLabel(
+            status_row,
+            text="CORE: IDLE",
+            font=("Consolas", 11, "bold"),
+            text_color="#7EE7F7"
+        )
+        self._thinking_status_lbl.pack(side="right", padx=14, pady=10)
+
+
+        # Chat display frame
+        chat_shell = ctk.CTkFrame(
+            p,
+            fg_color="#040B10",
+            corner_radius=18,
+            border_color="#103844",
+            border_width=1
+        )
+        chat_shell.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+
+        chat_top = ctk.CTkFrame(chat_shell, fg_color="transparent")
+        chat_top.pack(fill="x", padx=14, pady=(12, 6))
+
+        ctk.CTkLabel(
+            chat_top,
+            text="LIVE SESSION",
+            font=("Consolas", 12, "bold"),
+            text_color=C
+        ).pack(side="left")
+
+        ctk.CTkLabel(
+            chat_top,
+            text="AR HUD FEED",
+            font=("Consolas", 10),
+            text_color=TXTD
+        ).pack(side="right")
 
         hist = ctk.CTkTextbox(
-            p, font=("Consolas", 13), wrap="word",
-            fg_color="#0A1214", text_color=TXT
+            chat_shell,
+            font=("Consolas", 13),
+            wrap="word",
+            fg_color="#071018",
+            text_color=TXT,
+            corner_radius=12,
+            border_width=0
         )
-        hist.pack(side="top", fill="both", expand=True, padx=8, pady=(8, 4))
-        hist.insert("end", "Aries ▸ Hi! How can I help?\n")
+        hist.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
-        status = "Gemini READY ✅" if getattr(self, "gemini_client", None) else "Gemini NOT CONFIGURED ❌ (using local fallback)"
-        hist.insert("end", f"  ({status})\n\n")
+        hist.insert("end", "Aries ▸ Gemini link established.\n")
+        if getattr(self, "gemini_client", None):
+            hist.insert("end", "System ▸ Cloud reasoning online.\n")
+        else:
+            hist.insert("end", "System ▸ Local fallback active.\n")
+        hist.insert("end", "System ▸ Awaiting user input.\n\n")
         hist.configure(state="disabled")
 
-        bar = ctk.CTkFrame(p, fg_color="transparent")
-        bar.pack(side="bottom", fill="x", padx=8, pady=8)
+        # Bottom control area
+        controls = ctk.CTkFrame(
+            p,
+            fg_color="#061018",
+            corner_radius=18,
+            border_color="#103844",
+            border_width=1
+        )
+        controls.pack(fill="x", padx=12, pady=(0, 10))
+
+        ctk.CTkLabel(
+            controls,
+            text="COMMAND INPUT",
+            font=("Consolas", 10, "bold"),
+            text_color=C
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+
+        input_row = ctk.CTkFrame(controls, fg_color="transparent")
+        input_row.pack(fill="x", padx=10, pady=(0, 8))
 
         ent = ctk.CTkEntry(
-            bar, placeholder_text="Type a message …",
-            font=("Consolas", 13), fg_color=PNL,
-            text_color=TXT, border_color=CD
+            input_row,
+            placeholder_text="Ask Gemini something...",
+            font=("Consolas", 13),
+            fg_color="#0A161D",
+            text_color=TXT,
+            border_color=C,
+            corner_radius=14,
+            height=42
         )
-        ent.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ent.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        thinking_lbl = ctk.CTkLabel(
+            controls,
+            text="",
+            font=("Consolas", 11),
+            text_color="#7EE7F7"
+        )
+        thinking_lbl.pack(anchor="w", padx=12, pady=(0, 8))
+
+        btn_row = ctk.CTkFrame(controls, fg_color="transparent")
+        btn_row.pack(fill="x", padx=10, pady=(0, 12))
+
+        def set_thinking(text=""):
+            try:
+                if thinking_lbl.winfo_exists():
+                    thinking_lbl.configure(text=text)
+                if hasattr(self, "_thinking_status_lbl") and self._thinking_status_lbl.winfo_exists():
+                    self._thinking_status_lbl.configure(
+                        text=f"CORE: {text.upper()}" if text else "CORE: IDLE"
+                    )
+            except Exception:
+                pass
 
         def send(_=None):
             msg = ent.get().strip()
             if not msg:
                 return
+
             ent.delete(0, "end")
             hist.configure(state="normal")
             hist.insert("end", f"You ▸ {msg}\n")
             hist.configure(state="disabled")
             hist.see("end")
-            self.update_idletasks()
-            threading.Thread(
-                target=lambda: self._assistant_reply(msg, hist),
-                daemon=True
-            ).start()
+            set_thinking("Gemini is thinking...")
 
-        self._btn(bar, "Send", send, True, 72)
+            self.update_idletasks()
+
+            def _task():
+                reply = self._gemini_reply(msg)
+
+                def _update():
+                    try:
+                        if not hist.winfo_exists():
+                            return
+                        hist.configure(state="normal")
+                        hist.insert("end", f"Aries ▸ {reply}\n\n")
+                        hist.configure(state="disabled")
+                        hist.see("end")
+                        set_thinking("")
+                    except Exception:
+                        pass
+
+                self.after(0, _update)
+
+                if hasattr(self, "_speak_text"):
+                    self._speak_text(reply)
+
+            threading.Thread(target=_task, daemon=True).start()
+
+        def clear_chat():
+            hist.configure(state="normal")
+            hist.delete("1.0", "end")
+            hist.insert("end", "Aries ▸ Conversation cleared.\n\n")
+            hist.configure(state="disabled")
+            set_thinking("")
+
+        def talk_now():
+            self.toast.show("Push-to-talk active")
+            self.voice.activate()
+
+        btn_row = ctk.CTkFrame(controls, fg_color="transparent")
+        btn_row.pack(fill="x", padx=10, pady=(0, 10))
+
+        self._btn(btn_row, "Send", send, True, 80)
+        self._btn(btn_row, "Talk", talk_now, False, 80)
+        self._btn(btn_row, "Clear", clear_chat, False, 80)
+
         ent.bind("<Return>", send)
         ent.focus_set()
 
-    def _assistant_reply(self, msg, hist):
-        reply = self._gemini_reply(msg)
-
-        def _update():
-            try:
-                if not hist.winfo_exists():
-                    return
-                hist.configure(state="normal")
-                hist.insert("end", f"Aries ▸ {reply}\n\n")
-                hist.configure(state="disabled")
-                hist.see("end")
-            except Exception:
-                pass
-
-        self.after(0, _update)
-
     def _gemini_reply(self, msg):
-        # If Gemini isn't configured, fall back to the local MVP.
+        print("DEBUG: entering _gemini_reply")
+
         if not getattr(self, "gemini_client", None):
             return self._local_reply(msg)
 
         try:
+            print("DEBUG: sending request to Gemini")
             resp = self.gemini_client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=(
@@ -1318,18 +1522,16 @@ class VAApp(ctk.CTk):
                     f"User: {msg}"
                 ),
             )
+            print("DEBUG: Gemini response received")
+
             text = getattr(resp, "text", None)
             if text:
                 return text.strip()
+
             return "[No response]"
+
         except Exception as e:
             return f"(Gemini error: {e})"
-
-            return "Hello! I'm Aries, running on-device."
-        if "time" in low:
-            return f"It's {_time_str()}."
-        return "Processed locally (MVP)."
-
 
     # ═══════════════════════════════════════
     #  Camera

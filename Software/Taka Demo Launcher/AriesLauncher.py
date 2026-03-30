@@ -35,10 +35,9 @@ except Exception:
     cv2 = None
 
 try:
-    import ollama
+    from google import genai
 except Exception:
-    ollama = None
-
+    genai = None
 try:
     from deep_translator import GoogleTranslator
 except Exception:
@@ -126,7 +125,7 @@ APPS = [
     ("gesture.png",        "Gesture"),
     ("gps.png",            "Track"),
     ("livestream.png",     "LiveStream"),
-    ("localassistant.png", "LocalAI"),
+    ("localassistant.png", "Gemini"),
     ("music.png",          "Music"),
     ("phone.png",          "Phone"),
     ("photo.png",          "Photo"),
@@ -812,7 +811,6 @@ class VAApp(ctk.CTk):
         # State
         self.current_view = "home"
         self.assistant_chat_history = []
-        self.assistant_model_name = "gemma3:4b"
 
         self._cam_label = None
         self._cam_cap = None
@@ -848,6 +846,20 @@ class VAApp(ctk.CTk):
         if saved_mic is not None:
             self.log.info("Loaded saved mic index: %d", mic_idx)
 
+    
+            # ── Gemini Assistant (Google GenAI SDK) ──
+        self.gemini_client = None
+
+        if genai:
+            api_key = os.getenv("GEMINI_API_KEY")
+            if api_key:
+                self.gemini_client = genai.Client(api_key=api_key)
+                self.log.info("Gemini client initialized")
+            else:
+                self.log.warning("No GEMINI_API_KEY found")
+        else:
+            self.log.warning("google-genai SDK not installed")
+
         # Browser refs
         self._html = None
         self._b_url = None
@@ -855,6 +867,7 @@ class VAApp(ctk.CTk):
         # Handlers
         self._handlers = {
             "assistant": self.show_assistant,
+            "localassistant": self.show_assistant,
             "camera":    self.show_camera,
             "photo":     self.show_photos,
             "translate": self.show_translate,
@@ -1235,30 +1248,44 @@ class VAApp(ctk.CTk):
         self._view(f"app:{label}", label,
                    f"{label} is not fully implemented yet.", placeholder=True)
 
+    
     # ═══════════════════════════════════════
-    #  Assistant
+    #  Gemini Assistant
     # ═══════════════════════════════════════
 
     def show_assistant(self):
         p = self._view("assistant", "Assistant",
-                        "Local AI assistant powered by Ollama")
+                       "Cloud AI assistant powered by Gemini.")
 
+<<<<<<< HEAD
         hist = ctk.CTkTextbox(p, font=(FONT, 13), wrap="word",
                                fg_color="#1C1C1E", text_color=TXT)
+=======
+        hist = ctk.CTkTextbox(
+            p, font=("Consolas", 13), wrap="word",
+            fg_color="#0A1214", text_color=TXT
+        )
+>>>>>>> 3cae0c2 (four new additions for Gemini capabilities)
         hist.pack(side="top", fill="both", expand=True, padx=8, pady=(8, 4))
         hist.insert("end", "Aries ▸ Hi! How can I help?\n")
-        if ollama:
-            hist.insert("end", f"  (model: {self.assistant_model_name})\n\n")
-        else:
-            hist.insert("end", "  (local fallback)\n\n")
+        status = "Gemini READY ✅" if getattr(self, "gemini_model", None) else "Gemini NOT CONFIGURED ❌ (using local fallback)"
+        hist.insert("end", f"  ({status})\n\n")
         hist.configure(state="disabled")
 
         bar = ctk.CTkFrame(p, fg_color="transparent")
         bar.pack(side="bottom", fill="x", padx=8, pady=8)
 
+<<<<<<< HEAD
         ent = ctk.CTkEntry(bar, placeholder_text="Type a message …",
                             font=(FONT, 13), fg_color=PNL,
                             text_color=TXT, border_color="#3A3A3C")
+=======
+        ent = ctk.CTkEntry(
+            bar, placeholder_text="Type a message …",
+            font=("Consolas", 13), fg_color=PNL,
+            text_color=TXT, border_color=CD
+        )
+>>>>>>> 3cae0c2 (four new additions for Gemini capabilities)
         ent.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
         def send(_=None):
@@ -1271,15 +1298,18 @@ class VAApp(ctk.CTk):
             hist.configure(state="disabled")
             hist.see("end")
             self.update_idletasks()
-            threading.Thread(target=lambda: self._assistant_reply(msg, hist),
-                             daemon=True).start()
+            threading.Thread(
+                target=lambda: self._assistant_reply(msg, hist),
+                daemon=True
+            ).start()
 
         self._btn(bar, "Send", send, True, 72)
         ent.bind("<Return>", send)
         ent.focus_set()
 
     def _assistant_reply(self, msg, hist):
-        reply = self._ollama_reply(msg) if ollama else self._local_reply(msg)
+        reply = self._gemini_reply(msg)
+
         def _update():
             try:
                 if not hist.winfo_exists():
@@ -1290,38 +1320,48 @@ class VAApp(ctk.CTk):
                 hist.see("end")
             except Exception:
                 pass
+
         self.after(0, _update)
 
-    def _ollama_reply(self, msg):
-        if not ollama:
+        def _gemini_reply(self, msg):
+         if not getattr(self, "gemini_client", None):
             return self._local_reply(msg)
-        try:
-            msgs = [{"role": "system", "content":
-                     "You are Aries, an AI on AR smart glasses. Be concise."}]
-            msgs.extend(self.assistant_chat_history)
-            msgs.append({"role": "user", "content": msg})
-            resp = ollama.chat(model=self.assistant_model_name, messages=msgs)
-            ans = resp.get("message", {}).get("content", "").strip() or "[No response]"
-            self.assistant_chat_history.append({"role": "user", "content": msg})
-            self.assistant_chat_history.append({"role": "assistant", "content": ans})
-            return ans
-        except Exception as e:
-            return f"(LLM error: {e})"
 
+        try:
+            resp = self.gemini_client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=(
+                    "You are Aries, an AI inside AR smart glasses. "
+                    "Be concise and helpful.\n\n"
+                    f"User: {msg}"
+                ),
+            )
+
+            text = getattr(resp, "text", None)
+            if text:
+                return text.strip()
+
+            return "[No response]"
+        except Exception as e:
+            return f"(Gemini error: {e})"
+
+#Left the local AI reply just incase the device is not successfully connected to Gemini.
     def _local_reply(self, msg):
         import re, math
-        expr = re.sub(r"[^0-9+\\-*/.()\s]", "", msg)
+        expr = re.sub(r"[^0-9+\-*/.()\s]", "", msg)
         if expr and any(c.isdigit() for c in expr):
             try:
                 return f"{eval(expr, {'__builtins__': {}}, {'math': math})}"
             except Exception:
                 pass
+
         low = msg.lower()
         if "hello" in low or "hi" in low:
             return "Hello! I'm Aries, running on-device."
         if "time" in low:
             return f"It's {_time_str()}."
         return "Processed locally (MVP)."
+
 
     # ═══════════════════════════════════════
     #  Camera
@@ -1332,8 +1372,13 @@ class VAApp(ctk.CTk):
                         "Live preview · Capture saves to gallery")
 
         self._cam_label = ctk.CTkLabel(p, text="Initializing …",
+<<<<<<< HEAD
                                         font=(FONT, 13), text_color=TXTD)
         self._cam_label.pack(fill="both", expand=True)
+=======
+                                        font=("Consolas", 13), text_color=TXTD)
+        self._cam_label.pack(fill="both", expand=True) 
+>>>>>>> 3cae0c2 (four new additions for Gemini capabilities)
 
         ctk.CTkLabel(p, text="● LIVE", font=(FONT, 11, "bold"),
                       text_color=RED).place(relx=.97, rely=.03, anchor="ne")
