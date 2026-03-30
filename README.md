@@ -1,4 +1,4 @@
-# VA1-Wearable-Device-2026
+# Vision Aries - Wearable Device 2026
 
 
 
@@ -35,9 +35,8 @@ Wearable Device 2026 serves as tool for improving workplace and occupational out
 ## Phase 1 Hardware
 * Radxa Zero 2 Pro
 * Sony micro-display
-* TouchPad & Microphone Controls for navigation & volume
+* Cirque TouchPad & Voice Controls for navigation & volume
 * Camera Module
-* LED Status for video & photo capture indication
 
 ## Phase 2 Software
 * WiFi & Bluetooth capabilities
