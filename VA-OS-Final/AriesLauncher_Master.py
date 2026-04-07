@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 import time
 import threading
@@ -8,10 +8,11 @@ import logging
 import subprocess
 import tkinter as tk
 from datetime import datetime
+from queue import Empty, Queue
 from urllib.parse import quote_plus
 
 import customtkinter as ctk
-from PIL import Image, ImageTk, ImageDraw, ImageFilter, ImageGrab
+from PIL import Image, ImageDraw, ImageFilter, ImageGrab
 try:
     from tkinterweb import HtmlFrame
 except Exception:
@@ -41,9 +42,9 @@ except Exception:
     genai = None
 
 try:
-    import ollama
+    from dotenv import load_dotenv
 except Exception:
-    ollama = None
+    load_dotenv = None
 
 try:
     from deep_translator import GoogleTranslator
@@ -60,6 +61,37 @@ try:
 except Exception:
     GPIO = None
 
+try:
+    import pyttsx3
+except Exception:
+    pyttsx3 = None
+
+try:
+    import board
+    import busio
+except Exception:
+    board = None
+    busio = None
+
+try:
+    from adafruit_seesaw import seesaw as seesaw_module
+    from adafruit_seesaw import rotaryio as seesaw_rotaryio
+    from adafruit_seesaw import digitalio as seesaw_digitalio
+except Exception:
+    seesaw_module = None
+    seesaw_rotaryio = None
+    seesaw_digitalio = None
+
+try:
+    from adafruit_cirque_pinnacle import PinnacleSPI
+except Exception:
+    PinnacleSPI = None
+
+try:
+    from digitalio import DigitalInOut
+except Exception:
+    DigitalInOut = None
+
 # Logging
 
 logging.basicConfig(
@@ -67,6 +99,9 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+
+if load_dotenv:
+    load_dotenv()
 
 # Platform
 
@@ -147,7 +182,7 @@ APPS = [
     ("power.png",          "Power"),
 ]
 
-BUILD_STR = "VA-OS1.1 · Pandora Build"
+BUILD_STR = "VA-OS1.1 Â· Pandora Build"
 
 # Apple-inspired dark palette
 
@@ -162,7 +197,7 @@ AMB  = "#FF9F0A"       # Apple orange
 RED  = "#FF3B30"       # Apple red
 GRN  = "#30D158"       # Apple green
 
-# System font — pick best available
+# System font â€” pick best available
 FONT = "Helvetica Neue"
 FONT_MONO = "SF Mono"
 for _f in ("SF Pro Display", "Helvetica Neue", "Segoe UI", "Helvetica"):
@@ -194,15 +229,32 @@ SITE_ALIASES = {
 }
 
 
-# ═══════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  Helpers
-# ═══════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def _load(path):
     try:
         return Image.open(path).convert("RGBA")
     except Exception:
         return None
+
+
+def _make_ctk_image(img, size):
+    if img is None:
+        img = Image.new("RGBA", size, (0, 0, 0, 0))
+    return ctk.CTkImage(light_image=img, dark_image=img, size=size)
+
+
+def _start_safe_thread(target, name, log, *args, **kwargs):
+    def _runner():
+        try:
+            target(*args, **kwargs)
+        except Exception:
+            log.exception("Background thread '%s' crashed", name)
+    thread = threading.Thread(target=_runner, name=name, daemon=True)
+    thread.start()
+    return thread
 
 
 def _circle(img, size):
@@ -225,7 +277,7 @@ def _batt():
                 return f"{int(b.percent)}%"
         except Exception:
             pass
-    return "–%"
+    return "â€“%"
 
 
 def _cpu():
@@ -234,7 +286,7 @@ def _cpu():
             return f"{psutil.cpu_percent(interval=0):.0f}%"
         except Exception:
             pass
-    return "–%"
+    return "â€“%"
 
 
 def _ram():
@@ -243,7 +295,7 @@ def _ram():
             return f"{psutil.virtual_memory().percent:.0f}%"
         except Exception:
             pass
-    return "–%"
+    return "â€“%"
 
 
 def _time_str():
@@ -254,12 +306,12 @@ def _time_str():
         return now.strftime("%#I:%M %p")
 
 
-# ═══════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  StatusBar
-# ═══════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class StatusBar:
-    """Apple-style minimal status bar — time left, system right."""
+    """Apple-style minimal status bar â€” time left, system right."""
     def __init__(self, canvas):
         self.cv = canvas
         self._lines = []
@@ -289,9 +341,9 @@ class StatusBar:
         self.cv.itemconfigure(self._msg_id, text=msg)
 
 
-# ═══════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  Notification Toast
-# ═══════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class Toast:
     """Apple-style pill notification."""
@@ -323,18 +375,18 @@ class Toast:
         self.cv.itemconfigure(self._txt, state="hidden")
 
 
-# ═══════════════════════════════════════
-#  VoiceController — demo-ready state machine
-# ═══════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+#  VoiceController â€” demo-ready state machine
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #
-#  States:  IDLE → LISTENING → PROCESSING → IDLE
+#  States:  IDLE â†’ LISTENING â†’ PROCESSING â†’ IDLE
 #
 #  - No recording unless explicitly activated (push-to-talk via activate())
 #  - Single worker thread per session, guarded by state lock
 #  - Automatic stop after command recognized
 #  - Debounce: ignores rapid re-activation within cooldown window
 #  - Duplicate command filter within dedup window
-#  - Clean shutdown via shutdown() — no stuck threads
+#  - Clean shutdown via shutdown() â€” no stuck threads
 #  - All UI updates dispatched through a callback, never touches tk directly
 #
 
@@ -358,7 +410,7 @@ class VoiceController:
                  mic_index=None):
         self.log = logging.getLogger("Voice")
 
-        # Callbacks (all called from worker thread — caller must dispatch to UI)
+        # Callbacks (all called from worker thread â€” caller must dispatch to UI)
         self._on_result = on_result   # fn(text: str)
         self._on_state  = on_state    # fn(state: VoiceState)
         self._on_error  = on_error    # fn(msg: str)
@@ -405,7 +457,7 @@ class VoiceController:
     def _set_state(self, new_state):
         old = self._state
         self._state = new_state
-        self.log.info("State: %s → %s", old.value, new_state.value)
+        self.log.info("State: %s â†’ %s", old.value, new_state.value)
         if self._on_state:
             self._on_state(new_state)
 
@@ -419,7 +471,7 @@ class VoiceController:
                 self._on_error("Need: pip install SpeechRecognition pyaudio")
             return False
 
-        # Debounce — ignore rapid re-activation
+        # Debounce â€” ignore rapid re-activation
         now = time.perf_counter()
         if now - self._last_activate < self.COOLDOWN_SEC:
             self.log.debug("Activation debounced (%.1fs since last)",
@@ -429,7 +481,7 @@ class VoiceController:
         # Only activate from IDLE
         with self._lock:
             if self._state != VoiceState.IDLE:
-                self.log.debug("Activation ignored — state is %s", self._state.value)
+                self.log.debug("Activation ignored â€” state is %s", self._state.value)
                 return False
             self._set_state(VoiceState.LISTENING)
 
@@ -448,7 +500,7 @@ class VoiceController:
         self.log.info("Cancel requested")
 
     def shutdown(self):
-        """Clean shutdown — stops any active session, prevents new ones."""
+        """Clean shutdown â€” stops any active session, prevents new ones."""
         self._shutdown = True
         self._stop_event.set()
         if self._worker_thread and self._worker_thread.is_alive():
@@ -460,7 +512,7 @@ class VoiceController:
         self.log.info("Shutdown complete")
 
     def _worker(self):
-        """Background thread — records audio, runs STT, returns result."""
+        """Background thread â€” records audio, runs STT, returns result."""
         text = ""
         try:
             # Check for cancellation before opening mic
@@ -493,19 +545,19 @@ class VoiceController:
                 self._set_state(VoiceState.PROCESSING)
 
             # Run Google STT
-            self.log.info("Sending audio to Google STT …")
+            self.log.info("Sending audio to Google STT â€¦")
             text = self._recognizer.recognize_google(audio)
             self.log.info("Recognized: '%s'", text)
 
         except sr.WaitTimeoutError:
-            self.log.info("Timeout — no speech detected")
+            self.log.info("Timeout â€” no speech detected")
             if self._on_error:
-                self._on_error("No speech — try again")
+                self._on_error("No speech â€” try again")
 
         except sr.UnknownValueError:
             self.log.info("Could not understand audio")
             if self._on_error:
-                self._on_error("Couldn't understand — try again")
+                self._on_error("Couldn't understand â€” try again")
 
         except sr.RequestError as e:
             self.log.error("Google STT request failed: %s", e)
@@ -532,7 +584,7 @@ class VoiceController:
                 now = time.perf_counter()
                 normalized = text.lower().strip()
 
-                # Dedup — ignore identical command within window
+                # Dedup â€” ignore identical command within window
                 if (normalized == self._last_cmd
                         and now - self._last_cmd_time < self.DEDUP_SEC):
                     self.log.info("Duplicate command filtered: '%s'", normalized)
@@ -566,15 +618,15 @@ class VoiceController:
         return None
 
 
-# ═══════════════════════════════════════
-#  RotaryController — GPIO click wheel input
-# ═══════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+#  RotaryController â€” GPIO click wheel input
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #
 #  Hardware: Rotary encoder with push button (CLK, DT, SW)
-#  - Clockwise rotation → on_rotate(+1)
-#  - Counter-clockwise → on_rotate(-1)
-#  - Short press (< 1s) → on_click()
-#  - Long press (≥ 1s) → on_long_press()
+#  - Clockwise rotation â†’ on_rotate(+1)
+#  - Counter-clockwise â†’ on_rotate(-1)
+#  - Short press (< 1s) â†’ on_click()
+#  - Long press (â‰¥ 1s) â†’ on_long_press()
 #  - All callbacks fire from GPIO interrupt thread
 #  - Time-based debounce on both rotation and button
 #  - Graceful fallback when GPIO unavailable (desktop dev)
@@ -611,7 +663,7 @@ class RotaryController:
         self._active = False
 
         if not GPIO:
-            self.log.info("RPi.GPIO not available — rotary disabled (desktop mode)")
+            self.log.info("RPi.GPIO not available â€” rotary disabled (desktop mode)")
             return
 
         try:
@@ -651,7 +703,7 @@ class RotaryController:
         return self._active
 
     def _rotation_callback(self, channel):
-        """Called on CLK edge — reads DT to determine direction."""
+        """Called on CLK edge â€” reads DT to determine direction."""
         now = time.perf_counter()
         if now - self._last_rotate_time < self.ROTATE_DEBOUNCE_MS / 1000.0:
             return
@@ -669,7 +721,7 @@ class RotaryController:
         self._clk_last = clk_state
 
     def _button_callback(self, channel):
-        """Called on button edge — tracks press/release for long press."""
+        """Called on button edge â€” tracks press/release for long press."""
         pressed = GPIO.input(self._sw) == GPIO.LOW
 
         if pressed:
@@ -704,9 +756,311 @@ class RotaryController:
         self._active = False
 
 
-# ═══════════════════════════════════════
+class SeesawRotaryController:
+    """I2C rotary encoder via Adafruit seesaw with debounced click support."""
+
+    ROTATE_POLL_SEC = 0.018
+    ROTATE_DEBOUNCE_SEC = 0.03
+    BUTTON_DEBOUNCE_SEC = 0.18
+    LONG_PRESS_SEC = 0.9
+
+    def __init__(self, on_rotate=None, on_click=None, on_long_press=None,
+                 i2c_addr=0x36, button_pin=24):
+        self.log = logging.getLogger("RotaryI2C")
+        self._on_rotate = on_rotate
+        self._on_click = on_click
+        self._on_long_press = on_long_press
+        self._addr = i2c_addr
+        self._button_pin = button_pin
+        self._active = False
+        self._stop_event = threading.Event()
+        self._thread = None
+        self._encoder = None
+        self._button = None
+        self._position = 0
+        self._last_rotate_time = 0.0
+        self._button_down_time = 0.0
+        self._button_was_down = False
+
+        if not all((board, busio, seesaw_module, seesaw_rotaryio, seesaw_digitalio)):
+            self.log.info("Seesaw I2C rotary dependencies unavailable")
+            return
+
+        try:
+            i2c = busio.I2C(board.SCL, board.SDA)
+            self._seesaw = seesaw_module.Seesaw(i2c, addr=self._addr)
+            self._encoder = seesaw_rotaryio.IncrementalEncoder(self._seesaw)
+            self._button = seesaw_digitalio.DigitalIO(self._seesaw, self._button_pin)
+            self._button.switch_to_input(pull=True)
+            self._position = self._encoder.position
+            self._active = True
+            self._thread = _start_safe_thread(self._poll, "SeesawRotary", self.log)
+            self.log.info("Initialized seesaw encoder at I2C 0x%02X", self._addr)
+        except Exception:
+            self.log.exception("Failed to initialize seesaw rotary")
+            self._active = False
+
+    @property
+    def available(self):
+        return self._active
+
+    def _poll(self):
+        while not self._stop_event.is_set():
+            try:
+                pos = self._encoder.position
+                now = time.perf_counter()
+                if pos != self._position and now - self._last_rotate_time >= self.ROTATE_DEBOUNCE_SEC:
+                    step = pos - self._position
+                    self._position = pos
+                    self._last_rotate_time = now
+                    direction = 1 if step > 0 else -1
+                    for _ in range(abs(step)):
+                        if self._on_rotate:
+                            self._on_rotate(direction)
+
+                pressed = not bool(self._button.value)
+                if pressed and not self._button_was_down:
+                    self._button_down_time = now
+                    self._button_was_down = True
+                elif not pressed and self._button_was_down:
+                    self._button_was_down = False
+                    hold = now - self._button_down_time
+                    if hold >= self.LONG_PRESS_SEC:
+                        if self._on_long_press:
+                            self._on_long_press()
+                    elif hold >= self.BUTTON_DEBOUNCE_SEC and self._on_click:
+                        self._on_click()
+                time.sleep(self.ROTATE_POLL_SEC)
+            except Exception:
+                self.log.exception("Seesaw rotary polling failed; disabling controller")
+                self._active = False
+                self._stop_event.set()
+
+    def shutdown(self):
+        self._stop_event.set()
+        self._active = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+
+
+class TouchpadController:
+    """Cirque GlidePoint touchpad with safe fallback when hardware is absent."""
+
+    POLL_SEC = 0.035
+    TAP_WINDOW_SEC = 0.25
+    MOVE_THRESHOLD = 12
+    SWIPE_DEBOUNCE_SEC = 0.12
+
+    def __init__(self, on_swipe=None, on_tap=None, chip_select=None):
+        self.log = logging.getLogger("Touchpad")
+        self._on_swipe = on_swipe
+        self._on_tap = on_tap
+        self._chip_select = chip_select
+        self._active = False
+        self._stop_event = threading.Event()
+        self._thread = None
+        self._touchpad = None
+        self._last_x = None
+        self._last_y = None
+        self._touch_started = 0.0
+        self._last_swipe_at = 0.0
+
+        if not all((PinnacleSPI, board, busio, DigitalInOut)):
+            self.log.info("Pinnacle touchpad dependencies unavailable")
+            return
+
+        try:
+            spi = busio.SPI(board.SCK, MOSI=board.MOSI, MISO=board.MISO)
+            cs_pin = self._chip_select or getattr(board, "D5", None)
+            if cs_pin is None:
+                raise RuntimeError("No SPI chip-select pin configured")
+            self._touchpad = PinnacleSPI(spi, DigitalInOut(cs_pin))
+            if hasattr(self._touchpad, "absolute_mode"):
+                self._touchpad.absolute_mode = True
+            self._active = True
+            self._thread = _start_safe_thread(self._poll, "TouchpadPoll", self.log)
+            self.log.info("Cirque touchpad initialized")
+        except Exception:
+            self.log.exception("Touchpad initialization failed; disabling safely")
+            self._active = False
+
+    @property
+    def available(self):
+        return self._active
+
+    def _read_packet(self):
+        if hasattr(self._touchpad, "read"):
+            return self._touchpad.read()
+        if hasattr(self._touchpad, "read_data"):
+            return self._touchpad.read_data()
+        raise RuntimeError("Unsupported Pinnacle touchpad API")
+
+    def _poll(self):
+        while not self._stop_event.is_set():
+            try:
+                packet = self._read_packet()
+                touched = bool(getattr(packet, "touched", False) or getattr(packet, "touchDown", False))
+                x = getattr(packet, "x", None)
+                y = getattr(packet, "y", None)
+                now = time.perf_counter()
+
+                if touched and x is not None and y is not None:
+                    if self._last_x is None:
+                        self._last_x, self._last_y = x, y
+                        self._touch_started = now
+                    else:
+                        dx = x - self._last_x
+                        dy = y - self._last_y
+                        if abs(dx) >= self.MOVE_THRESHOLD or abs(dy) >= self.MOVE_THRESHOLD:
+                            if now - self._last_swipe_at >= self.SWIPE_DEBOUNCE_SEC:
+                                if abs(dx) >= abs(dy):
+                                    direction = "right" if dx > 0 else "left"
+                                else:
+                                    direction = "down" if dy > 0 else "up"
+                                self._last_swipe_at = now
+                                self._last_x, self._last_y = x, y
+                                if self._on_swipe:
+                                    self._on_swipe(direction)
+                elif self._last_x is not None:
+                    if now - self._touch_started <= self.TAP_WINDOW_SEC and self._on_tap:
+                        self._on_tap()
+                    self._last_x = None
+                    self._last_y = None
+
+                time.sleep(self.POLL_SEC)
+            except Exception:
+                self.log.exception("Touchpad polling failed; disabling controller")
+                self._active = False
+                self._stop_event.set()
+
+    def shutdown(self):
+        self._stop_event.set()
+        self._active = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+
+
+class VoiceCommandLoop:
+    """Continuous non-blocking speech command loop with robust error handling."""
+
+    LISTEN_TIMEOUT = 2
+    PHRASE_LIMIT = 4
+    IDLE_PAUSE_SEC = 0.4
+
+    def __init__(self, on_command=None, on_error=None, mic_index=None):
+        self.log = logging.getLogger("VoiceLoop")
+        self._on_command = on_command
+        self._on_error = on_error
+        self._mic_index = mic_index
+        self._thread = None
+        self._stop_event = threading.Event()
+        self._recognizer = None
+        self._last_error = ""
+        if sr:
+            self._recognizer = sr.Recognizer()
+            self._recognizer.dynamic_energy_threshold = True
+        else:
+            self.log.info("SpeechRecognition unavailable; background voice loop disabled")
+
+    @property
+    def available(self):
+        return self._recognizer is not None
+
+    def start(self):
+        if not self.available or (self._thread and self._thread.is_alive()):
+            return
+        self._stop_event.clear()
+        self._thread = _start_safe_thread(self._run, "VoiceCommandLoop", self.log)
+
+    def shutdown(self):
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+
+    def _emit_error(self, msg):
+        if msg != self._last_error and self._on_error:
+            self._last_error = msg
+            self._on_error(msg)
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            try:
+                mic = sr.Microphone(device_index=self._mic_index) if self._mic_index is not None else sr.Microphone()
+                with mic as source:
+                    self._recognizer.adjust_for_ambient_noise(source, duration=0.4)
+                    audio = self._recognizer.listen(
+                        source,
+                        timeout=self.LISTEN_TIMEOUT,
+                        phrase_time_limit=self.PHRASE_LIMIT,
+                    )
+                text = self._recognizer.recognize_google(audio).strip()
+                if text and self._on_command:
+                    self._on_command(text)
+                self._last_error = ""
+            except sr.WaitTimeoutError:
+                time.sleep(self.IDLE_PAUSE_SEC)
+            except sr.UnknownValueError:
+                time.sleep(self.IDLE_PAUSE_SEC)
+            except OSError as exc:
+                self.log.error("Voice loop microphone error: %s", exc)
+                self._emit_error(f"Voice loop unavailable: {exc}")
+                time.sleep(2.0)
+            except sr.RequestError as exc:
+                self.log.error("Voice loop speech service error: %s", exc)
+                self._emit_error(f"Voice service error: {exc}")
+                time.sleep(2.0)
+            except Exception as exc:
+                self.log.exception("Voice loop failed")
+                self._emit_error(f"Voice loop error: {exc}")
+                time.sleep(2.0)
+
+
+class TTSController:
+    """Queued pyttsx3 wrapper using system-default audio output."""
+
+    def __init__(self):
+        self.log = logging.getLogger("TTS")
+        self._queue = Queue()
+        self._stop_event = threading.Event()
+        self._engine = None
+        self.available = False
+        if not pyttsx3:
+            self.log.info("pyttsx3 unavailable")
+            return
+        try:
+            self._engine = pyttsx3.init()
+            self.available = True
+            self._thread = _start_safe_thread(self._worker, "TTSWorker", self.log)
+        except Exception:
+            self.log.exception("TTS initialization failed")
+
+    def speak(self, text):
+        if self.available and text:
+            self._queue.put(text)
+
+    def shutdown(self):
+        self._stop_event.set()
+        if self.available:
+            self._queue.put(None)
+
+    def _worker(self):
+        while not self._stop_event.is_set():
+            try:
+                item = self._queue.get(timeout=0.5)
+            except Empty:
+                continue
+            if item is None:
+                continue
+            try:
+                self._engine.say(item)
+                self._engine.runAndWait()
+            except Exception:
+                self.log.exception("TTS playback failed")
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  CoverFlow
-# ═══════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class CoverFlow:
     def __init__(self, canvas, apps):
@@ -723,12 +1077,16 @@ class CoverFlow:
             self.apps.append({"id": os.path.splitext(fn)[0],
                               "label": label, "img": img, "cache": {}})
 
-        self._icons = [canvas.create_image(0, 0, image=None, anchor="nw")
-                       for _ in range(5)]
+        self._icon_widgets = [
+            ctk.CTkLabel(canvas.master, text="", fg_color="transparent")
+            for _ in range(5)
+        ]
+        self._icons = [canvas.create_window(0, 0, window=w, anchor="center")
+                       for w in self._icon_widgets]
         self._label = canvas.create_text(
             0, 0, text="", fill=TXT, font=(FONT, 15))
 
-    def _tkimg(self, app, sz, alpha):
+    def _ctkimg(self, app, sz, alpha):
         sq = max(14, round(sz / SIZE_STEP_PX) * SIZE_STEP_PX)
         a8 = int(max(0, min(255, round(alpha * 255 / ALPHA_STEP_8) * ALPHA_STEP_8)))
         key = (sq, a8)
@@ -738,9 +1096,9 @@ class CoverFlow:
         if a8 < 255:
             am = circ.split()[-1].point(lambda p, _a=a8: int(p * _a / 255))
             circ.putalpha(am)
-        tk = ImageTk.PhotoImage(circ)
-        app["cache"][key] = tk
-        return tk
+        ctk_img = _make_ctk_image(circ, (sq, sq))
+        app["cache"][key] = ctk_img
+        return ctk_img
 
     def step(self, dt):
         n = len(self.apps)
@@ -775,13 +1133,12 @@ class CoverFlow:
             scale = max(0.70, 1.0 - SCALE_DROP * dist)
             alpha = max(0.46, 1.0 - ALPHA_DROP * dist)
             sz = int(BASE_ICON * scale)
-            tk = self._tkimg(app, sz, alpha)
+            ctk_img = self._ctkimg(app, sz, alpha)
             cx, cy = x0 + i * SPACING, my
-            self.cv.itemconfigure(self._icons[slot], image=tk)
-            self.cv.coords(self._icons[slot],
-                           int(cx - tk.width() / 2), int(cy - tk.height() / 2))
-            self._refs[slot] = tk
-            positions.append((cx, cy, tk.width(), app["label"]))
+            self._icon_widgets[slot].configure(image=ctk_img)
+            self.cv.coords(self._icons[slot], int(cx), int(cy))
+            self._refs[slot] = ctk_img
+            positions.append((cx, cy, sz, app["label"]))
         for cx, cy, w, label in positions:
             if abs(cx - mx) < 2:
                 self.cv.itemconfigure(self._label, text=label, fill=TXT)
@@ -813,16 +1170,20 @@ class TouchKeyboard:
         self._preview_var = None
         self._flash_token = None
         self._flash_after = None
+        self._last_geometry = None
 
     def ensure(self):
         if self.window is not None:
             return
 
-        self.window = tk.Toplevel(self.app)
-        self.window.withdraw()
-        self.window.overrideredirect(True)
-        self.window.transient(self.app)
-        self.window.configure(bg="#050506", bd=1, highlightthickness=1, highlightbackground="#2C2C2E")
+        # Render inside the main app so the keyboard stays in the visible UI stack.
+        self.window = tk.Frame(
+            self.app,
+            bg="#050506",
+            bd=1,
+            highlightthickness=1,
+            highlightbackground="#2C2C2E",
+        )
 
         shell = ctk.CTkFrame(self.window, fg_color="#050506", corner_radius=0)
         shell.pack(fill="both", expand=True)
@@ -897,32 +1258,61 @@ class TouchKeyboard:
 
     def show(self):
         self.ensure()
+        was_visible = self.visible
         self.visible = True
-        self.sel_row = 0
-        self.sel_col = 0
-        self._position()
-        self.window.deiconify()
+        if not was_visible:
+            self.sel_row = 0
+            self.sel_col = 0
+        self._position(force=True)
         self.window.lift()
-        self.window.attributes("-topmost", True)
+        self.window.tkraise()
+        if hasattr(self.app, "_vf") and self.app._vf is not None:
+            try:
+                self.app._vf.lift()
+            except Exception:
+                pass
+            self.window.lift(self.app._vf)
+            self.window.tkraise(self.app._vf)
+        self.app.lift()
+        self.app.update_idletasks()
+        self.app.log.debug("Touch keyboard placed and visible at bottom overlay")
         self.refresh()
 
     def hide(self):
         if self.window is not None:
-            self.window.withdraw()
+            self.window.place_forget()
+            self.app.log.debug("Touch keyboard hidden")
         self.visible = False
 
-    def _position(self):
+    def _position(self, force=False):
         self.app.update_idletasks()
-        x = self.app.winfo_rootx()
-        y = self.app.winfo_rooty() + self.app.winfo_height() - 210
-        w = max(self.app.winfo_width(), WIDTH)
-        h = 210
-        self.window.geometry(f"{w}x{h}+{x}+{y}")
+        app_w = max(self.app.winfo_width(), WIDTH)
+        app_h = max(self.app.winfo_height(), HEIGHT)
+        rel_h = 0.32
+        abs_h = max(210, min(260, int(app_h * rel_h)))
+        geometry = (app_w, abs_h)
+        if not force and geometry == self._last_geometry:
+            return
+        self.window.place(
+            relx=0.0,
+            rely=1.0,
+            anchor="sw",
+            relwidth=1.0,
+            width=app_w,
+            height=abs_h,
+        )
+        self._last_geometry = geometry
+        self.window.lift()
+        self.window.tkraise()
+        self.app.log.debug(
+            "Touch keyboard geometry set: width=%s height=%s bottom anchored",
+            app_w,
+            abs_h,
+        )
 
     def refresh(self):
         if self.window is None:
             return
-        self._position()
         if self._preview_var is not None:
             self._preview_var.set(self.app._active_input_text())
         for r, row_buttons in enumerate(self._buttons):
@@ -934,6 +1324,9 @@ class TouchKeyboard:
                     text=self._label(token),
                     fg_color=AMB if flashing else (C if selected else "#0A0A0B"),
                     hover_color=AMB if flashing else (CD if selected else "#171719"),
+                    border_width=2 if selected or flashing else 1,
+                    border_color=AMB if flashing else (C if selected else "#2A2A2E"),
+                    text_color=BG if selected or flashing else TXT,
                 )
 
     def move(self, dx=0, dy=0):
@@ -985,9 +1378,9 @@ class TouchKeyboard:
         return None
 
 
-# ═══════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  Main App
-# ═══════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class VAApp(ctk.CTk):
 
@@ -1025,20 +1418,21 @@ class VAApp(ctk.CTk):
             font=(FONT, 10),
             text='S Screenshot    T Timer    Enter Open    Esc Back')
 
-        # Overlay frame — raw tk.Frame to avoid ghost rectangle
+        # Overlay frame â€” raw tk.Frame to avoid ghost rectangle
         self._vf = None
         self._vf_visible = False
 
         # State
         self.current_view = "home"
         self.assistant_chat_history = []
-        self.assistant_model_name = "gemma3:4b"
 
         self._cam_label = None
         self._cam_cap = None
         self._cam_after = None
         self._cam_running = False
         self._cam_last_frame = None
+        self._cam_source_index = None
+        self._cam_image = None
 
         self.dark_mode = True
         self.bluetooth_enabled = False
@@ -1051,7 +1445,7 @@ class VAApp(ctk.CTk):
             WIDTH - 28, 40, text="", anchor="ne", fill=TXT,
             font=(FONT, 13, "bold"))
 
-        # ── Voice controller ──
+        # â”€â”€ Voice controller â”€â”€
         cfg = _load_config()
         saved_mic = cfg.get("mic_index", None)
         if saved_mic is not None:
@@ -1068,26 +1462,42 @@ class VAApp(ctk.CTk):
         if saved_mic is not None:
             self.log.info("Loaded saved mic index: %d", mic_idx)
 
-        # Gemini Assistant (optional cloud backend)
+    
+            # â”€â”€ Gemini Assistant (Google GenAI SDK) â”€â”€
         self.gemini_client = None
+        self.gemini_enabled = False
+        self.gemini_model = "gemini-2.0-flash"
+        self.tts = TTSController()
+        self.voice_loop = VoiceCommandLoop(
+            on_command=self._voice_on_result,
+            on_error=self._voice_on_error,
+            mic_index=mic_idx,
+        )
+        self.voice_loop.start()
+
         if genai:
             api_key = os.getenv("GEMINI_API_KEY")
             if api_key:
                 try:
                     self.gemini_client = genai.Client(api_key=api_key)
+                    self.gemini_enabled = True
                     self.log.info("Gemini client initialized")
-                except Exception as exc:
-                    self.log.warning("Gemini init failed: %s", exc)
+                except Exception:
+                    self.log.exception("Gemini client initialization failed")
             else:
-                self.log.info("No GEMINI_API_KEY found")
+                self.log.warning("No GEMINI_API_KEY found")
         else:
-            self.log.info("google-genai SDK not installed")
+            self.log.warning("google-genai SDK not installed")
 
         # Browser refs
         self._html = None
         self._b_url = None
+        self._browser_entry = None
         self._active_input = None
         self._active_submit = None
+        self._input_submit_map = {}
+        self._nav_focus_widget = None
+        self._nav_focus_style = {}
         self._touch_keyboard = TouchKeyboard(self)
 
         # Handlers
@@ -1106,14 +1516,24 @@ class VAApp(ctk.CTk):
             "power":     self.show_power,
         }
 
-        # ── Rotary encoder (GPIO) ──
-        self.rotary = RotaryController(
+        # â”€â”€ Rotary encoder (GPIO) â”€â”€
+        self.rotary = SeesawRotaryController(
             on_rotate=self._rotary_rotate,
             on_click=self._rotary_click,
             on_long_press=self._rotary_long,
         )
+        if not self.rotary.available:
+            self.rotary = RotaryController(
+                on_rotate=self._rotary_rotate,
+                on_click=self._rotary_click,
+                on_long_press=self._rotary_long,
+            )
+        self.touchpad = TouchpadController(
+            on_swipe=lambda direction: self.after(0, lambda d=direction: self._touchpad_swipe(d)),
+            on_tap=lambda: self.after(0, self._touchpad_tap),
+        )
 
-        # Keys — V, S, T work globally
+        # Keys â€” V, S, T work globally
         self.bind("<Left>",   self._k_left)
         self.bind("<Right>",  self._k_right)
         self.bind("<Up>",     self._k_up)
@@ -1130,6 +1550,8 @@ class VAApp(ctk.CTk):
         self.bind_all("<MouseWheel>", self._k_wheel)
         self.bind_all("<Button-4>", lambda e: self._nav(+1))
         self.bind_all("<Button-5>", lambda e: self._nav(-1))
+        self.bind_all("<FocusIn>", self._global_text_input_focus, add="+")
+        self.bind_all("<Button-1>", self._global_text_input_click, add="+")
 
         # Clean exit
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1138,17 +1560,20 @@ class VAApp(ctk.CTk):
         self._tick()
 
     def _on_close(self):
-        """Clean shutdown — release all resources."""
-        self.log.info("Shutting down …")
+        """Clean shutdown â€” release all resources."""
+        self.log.info("Shutting down â€¦")
         self.voice.shutdown()
+        self.voice_loop.shutdown()
         self.rotary.shutdown()
+        self.touchpad.shutdown()
+        self.tts.shutdown()
         self._stop_camera()
         self._close_browser()
         self.destroy()
 
-    # ═══════════════════════════════════════
-    #  Voice callbacks (called from worker thread — must dispatch to UI)
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    #  Voice callbacks (called from worker thread â€” must dispatch to UI)
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _voice_on_result(self, text):
         """Called from voice worker thread with recognized text."""
@@ -1171,37 +1596,37 @@ class VAApp(ctk.CTk):
     def _voice_handle_state(self, state):
         """UI-thread handler for voice state changes."""
         if state == VoiceState.LISTENING:
-            self.cv.itemconfigure(self._mic_id, text="Listening…", fill=AMB)
-            self.toast.show("Speak now…")
+            self.cv.itemconfigure(self._mic_id, text="Listeningâ€¦", fill=AMB)
+            self.toast.show("Speak nowâ€¦")
         elif state == VoiceState.PROCESSING:
-            self.cv.itemconfigure(self._mic_id, text="Processing…", fill=C)
-            self.toast.show("Processing…", 1500)
+            self.cv.itemconfigure(self._mic_id, text="Processingâ€¦", fill=C)
+            self.toast.show("Processingâ€¦", 1500)
         elif state == VoiceState.IDLE:
             self.cv.itemconfigure(self._mic_id, text="", fill=TXTD)
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Rotary callbacks (called from GPIO thread)
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _rotary_rotate(self, direction):
-        """GPIO thread → UI thread: rotate coverflow."""
-        self.after(0, lambda: self._touchpad_swipe("right" if direction > 0 else "left"))
+        """Hardware thread â†’ UI thread: global navigation move."""
+        self.after(0, lambda d=direction: self._global_move("next" if d > 0 else "prev"))
 
     def _rotary_click(self):
-        """GPIO thread → UI thread: select app, or voice if browser open."""
-        self.after(0, self._touchpad_tap)
+        """Hardware thread â†’ UI thread: global select."""
+        self.after(0, self._global_select)
 
     def _rotary_long(self):
-        """GPIO thread → UI thread: go home."""
-        self.after(0, self._touchpad_long_press)
+        """Hardware thread â†’ UI thread: global back."""
+        self.after(0, self._global_back)
 
-    # ── HUD chrome ──
+    # â”€â”€ HUD chrome â”€â”€
 
     def _draw_chrome(self):
-        """Minimal chrome — just a subtle separator under the status bar."""
+        """Minimal chrome â€” just a subtle separator under the status bar."""
         self.cv.create_line(28, 38, WIDTH - 28, 38, fill="#2C2C2E")
 
-    # ── Key handlers ──
+    # â”€â”€ Key handlers â”€â”€
 
     def _typing(self):
         """Check if a LIVE text input widget has focus.
@@ -1209,6 +1634,8 @@ class VAApp(ctk.CTk):
         focus tracker can still point to the dead widget. A destroyed
         tk.Entry still passes isinstance() checks, so we must verify
         the widget is alive first via winfo_exists()."""
+        if self._touch_keyboard.visible and self._active_input_alive():
+            return True
         f = self.focus_get()
         if f is None:
             return False
@@ -1270,7 +1697,7 @@ class VAApp(ctk.CTk):
             self._nav(1 if e.delta > 0 else -1)
 
     def _k_v(self, e):
-        # Push-to-talk — works from any screen unless typing
+        # Push-to-talk â€” works from any screen unless typing
         if not self._typing():
             self.voice.activate()
 
@@ -1299,25 +1726,25 @@ class VAApp(ctk.CTk):
         if token is not None:
             self.after(0, lambda t=token: self._touch_keyboard.flash(t, persist_ms=180))
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Timer / Stopwatch
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _toggle_timer(self):
         if self._timer_running:
             self._timer_running = False
             elapsed = time.perf_counter() - self._timer_start
             m, s = divmod(int(elapsed), 60)
-            self.cv.itemconfigure(self._timer_id, text=f"⏱ {m:02d}:{s:02d} STOPPED")
+            self.cv.itemconfigure(self._timer_id, text=f"â± {m:02d}:{s:02d} STOPPED")
             self.toast.show(f"Timer stopped: {m:02d}:{s:02d}")
         else:
             self._timer_running = True
             self._timer_start = time.perf_counter()
-            self.toast.show("Timer started — press [T] to stop")
+            self.toast.show("Timer started â€” press [T] to stop")
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Screenshot
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _screenshot(self):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1326,14 +1753,14 @@ class VAApp(ctk.CTk):
             x, y = self.winfo_rootx(), self.winfo_rooty()
             img = ImageGrab.grab(bbox=(x, y, x + WIDTH, y + HEIGHT))
             img.save(path)
-            self.toast.show("📸 Screenshot saved")
+            self.toast.show("ðŸ“¸ Screenshot saved")
             self.status.append(f"Screenshot: {os.path.basename(path)}")
         except Exception as e:
             self.status.append(f"Screenshot failed: {e}")
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Voice routing
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _voice_route(self, cmd):
         if self._active_input_alive():
@@ -1351,13 +1778,13 @@ class VAApp(ctk.CTk):
                 self._submit_active_input()
                 return
 
-        # Strip common prefixes so "open camera" → "camera"
+        # Strip common prefixes so "open camera" â†’ "camera"
         for prefix in ("open ", "go to ", "launch ", "start ", "show "):
             if cmd.startswith(prefix):
                 cmd = cmd[len(prefix):]
                 break
 
-        # Direct website open — "open up X website" / "go to X site"
+        # Direct website open â€” "open up X website" / "go to X site"
         for suffix in (" website", " site"):
             if cmd.endswith(suffix):
                 target = cmd[:-len(suffix)].strip()
@@ -1379,7 +1806,7 @@ class VAApp(ctk.CTk):
 
         words = set(cmd.split())
 
-        # Explicit search — "search X" / "look up X" / "google X"
+        # Explicit search â€” "search X" / "look up X" / "google X"
         for prefix in ("search for ", "look up ", "google ", "search "):
             if cmd.startswith(prefix):
                 q = cmd[len(prefix):].strip()
@@ -1387,7 +1814,7 @@ class VAApp(ctk.CTk):
                     self._browser_search(q)
                 return
 
-        # Keyword routes — app commands
+        # Keyword routes â€” app commands
         routes = [
             ({"take", "photo"},    lambda: self._voice_capture()),
             ({"take", "picture"},  lambda: self._voice_capture()),
@@ -1434,7 +1861,7 @@ class VAApp(ctk.CTk):
                 action()
                 return
 
-        # No match — tell user
+        # No match â€” tell user
         self.toast.show(f"Unknown command: \"{cmd}\"")
         self.status.append(f"No match: \"{cmd}\"")
 
@@ -1445,13 +1872,228 @@ class VAApp(ctk.CTk):
             self.show_camera()
             self.after(700, self._capture_photo)
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Navigation
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _nav(self, d):
         if self.current_view == "home":
             self.cflow.move(d)
+
+    def _is_focusable_widget(self, widget):
+        if widget is None:
+            return False
+        try:
+            if not widget.winfo_exists() or not widget.winfo_viewable():
+                return False
+        except Exception:
+            return False
+
+        if not isinstance(widget, (ctk.CTkButton, ctk.CTkEntry, ctk.CTkTextbox, tk.Button, tk.Entry, tk.Text)):
+            return False
+
+        try:
+            state = widget.cget("state")
+            if state == "disabled":
+                return False
+        except Exception:
+            pass
+        return True
+
+    def _iter_focusable_widgets(self, parent):
+        widgets = []
+        try:
+            children = parent.winfo_children()
+        except Exception:
+            return widgets
+
+        for child in children:
+            if self._is_focusable_widget(child):
+                widgets.append(child)
+            widgets.extend(self._iter_focusable_widgets(child))
+        return widgets
+
+    def _ensure_widget_visible(self, widget):
+        if widget is None:
+            return
+        try:
+            if isinstance(widget, (ctk.CTkTextbox, tk.Text)):
+                widget.see("insert")
+        except Exception:
+            pass
+
+    def _clear_visual_focus(self):
+        widget = self._nav_focus_widget
+        if widget is None:
+            return
+        if not self._widget_alive(widget):
+            self._nav_focus_widget = None
+            self._nav_focus_style = {}
+            return
+
+        styles = self._nav_focus_style
+        try:
+            if isinstance(widget, (ctk.CTkButton, ctk.CTkEntry, ctk.CTkTextbox)):
+                if "border_width" in styles:
+                    widget.configure(border_width=styles["border_width"])
+                if "border_color" in styles:
+                    widget.configure(border_color=styles["border_color"])
+            else:
+                widget.configure(
+                    highlightthickness=styles.get("highlightthickness", 0),
+                    highlightbackground=styles.get("highlightbackground", BG),
+                    highlightcolor=styles.get("highlightcolor", C),
+                )
+        except Exception:
+            pass
+
+        self._nav_focus_widget = None
+        self._nav_focus_style = {}
+
+    def _set_visual_focus(self, widget):
+        if widget is None or not self._widget_alive(widget):
+            return
+
+        if widget is self._nav_focus_widget:
+            self._ensure_widget_visible(widget)
+            return
+
+        self._clear_visual_focus()
+        try:
+            if isinstance(widget, (ctk.CTkButton, ctk.CTkEntry, ctk.CTkTextbox)):
+                style = {}
+                for key in ("border_width", "border_color"):
+                    try:
+                        style[key] = widget.cget(key)
+                    except Exception:
+                        pass
+                self._nav_focus_style = style
+                widget.configure(border_width=max(2, int(style.get("border_width", 1) or 1)), border_color=C)
+            else:
+                self._nav_focus_style = {
+                    "highlightthickness": widget.cget("highlightthickness"),
+                    "highlightbackground": widget.cget("highlightbackground"),
+                    "highlightcolor": widget.cget("highlightcolor"),
+                }
+                widget.configure(highlightthickness=2, highlightbackground=C, highlightcolor=C)
+        except Exception:
+            self._nav_focus_style = {}
+
+        self._nav_focus_widget = widget
+        self._ensure_widget_visible(widget)
+
+    def _widget_alive(self, widget):
+        try:
+            return widget is not None and widget.winfo_exists()
+        except Exception:
+            return False
+
+    def _focus_widget(self, widget):
+        if not self._widget_alive(widget):
+            return False
+        try:
+            widget.focus_set()
+        except Exception:
+            return False
+
+        self._set_visual_focus(widget)
+        if self._is_text_input_widget(widget):
+            self._activate_text_input(widget)
+        return True
+
+    def _move_focus(self, delta):
+        if self.current_view == "home":
+            self._nav(delta)
+            return
+
+        container = self._vf if self._vf_visible and self._vf is not None else self
+        focusable = self._iter_focusable_widgets(container)
+        if not focusable:
+            return
+
+        current = self._resolve_text_input_widget(self.focus_get()) or self.focus_get() or self._active_input
+        try:
+            idx = focusable.index(current)
+        except Exception:
+            idx = -1
+
+        next_idx = (idx + delta) % len(focusable)
+        self._focus_widget(focusable[next_idx])
+
+    def _global_move(self, direction):
+        if self._touch_keyboard.visible:
+            move_map = {
+                "left": (-1, 0),
+                "right": (1, 0),
+                "up": (0, -1),
+                "down": (0, 1),
+                "prev": (-1, 0),
+                "next": (1, 0),
+            }
+            dx, dy = move_map.get(direction, (0, 0))
+            if dx or dy:
+                self._touch_keyboard.move(dx=dx, dy=dy)
+            return
+
+        if self.current_view == "home":
+            if direction in {"left", "prev"}:
+                self._nav(-1)
+            elif direction in {"right", "next"}:
+                self._nav(+1)
+            return
+
+        if direction in {"left", "up", "prev"}:
+            self._move_focus(-1)
+        elif direction in {"right", "down", "next"}:
+            self._move_focus(+1)
+
+    def _invoke_focused_widget(self):
+        widget = self.focus_get()
+        if widget is None:
+            return False
+
+        resolved = self._resolve_text_input_widget(widget)
+        if resolved is not None:
+            self._activate_text_input(resolved)
+            return True
+
+        if isinstance(widget, ctk.CTkButton):
+            try:
+                widget.invoke()
+                return True
+            except Exception:
+                return False
+
+        try:
+            widget.invoke()
+            return True
+        except Exception:
+            pass
+
+        try:
+            widget.event_generate("<Return>")
+            return True
+        except Exception:
+            return False
+
+    def _global_select(self):
+        if self._touch_keyboard.visible:
+            self._touch_keyboard.activate()
+            return
+        if self.current_view == "home":
+            self._open_sel()
+            return
+        if self._active_input_alive():
+            self._activate_text_input(self._active_input)
+            return
+        self._invoke_focused_widget()
+
+    def _global_back(self):
+        if self._touch_keyboard.visible:
+            self._hide_touch_keyboard()
+            return
+        if self.current_view != "home":
+            self._go_home()
 
     def _open_sel(self):
         app = self.cflow.current()
@@ -1468,6 +2110,7 @@ class VAApp(ctk.CTk):
         self.current_view = "home"
         self._stop_camera()
         self._close_browser()
+        self._clear_visual_focus()
         self._hide_touch_keyboard()
         if self._vf_visible and self._vf:
             self._vf.place_forget()
@@ -1475,9 +2118,9 @@ class VAApp(ctk.CTk):
         self.cv.focus_set()
         self.status.append("Home")
 
-    # ═══════════════════════════════════════
-    #  View frame — lazy raw tk.Frame
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    #  View frame â€” lazy raw tk.Frame
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _ensure_vf(self):
         if self._vf is None:
@@ -1487,6 +2130,7 @@ class VAApp(ctk.CTk):
         self._stop_camera()
         self._active_input = None
         self._active_submit = None
+        self._clear_visual_focus()
         self._hide_touch_keyboard()
         if self._vf:
             for w in self._vf.winfo_children():
@@ -1505,11 +2149,11 @@ class VAApp(ctk.CTk):
             self._vf.tkraise()
             self._vf_visible = True
 
-        # Top bar — Apple style
+        # Top bar â€” Apple style
         top = ctk.CTkFrame(self._vf, fg_color="transparent", height=52)
         top.pack(fill="x")
         top.pack_propagate(False)
-        ctk.CTkLabel(top, text=f"‹  {title}", font=(FONT, 18),
+        ctk.CTkLabel(top, text=f"â€¹  {title}", font=(FONT, 18),
                       text_color=C).pack(side="left", padx=24, pady=12)
         ctk.CTkLabel(top, text="Esc back",
                       font=(FONT, 10),
@@ -1528,51 +2172,90 @@ class VAApp(ctk.CTk):
         panel.pack(pady=(6, 10), padx=24, fill="both", expand=True)
 
         if placeholder:
-            ctk.CTkLabel(panel, text=f"{title} — coming soon",
+            ctk.CTkLabel(panel, text=f"{title} â€” coming soon",
                           font=(FONT, 14), text_color=TXTD,
                           justify="center").place(relx=.5, rely=.5, anchor="center")
         return panel
 
     def _touchpad_swipe(self, direction):
-        if self._touch_keyboard.visible:
-            moves = {
-                "left": (-1, 0),
-                "right": (1, 0),
-                "up": (0, -1),
-                "down": (0, 1),
-            }
-            dx, dy = moves.get(direction, (0, 0))
-            self._touch_keyboard.move(dx=dx, dy=dy)
-            return
-
-        if self.current_view == "home":
-            if direction == "left":
-                self._nav(-1)
-            elif direction == "right":
-                self._nav(+1)
+        self._global_move(direction)
 
     def _touchpad_tap(self):
-        if self._touch_keyboard.visible:
-            self._touch_keyboard.activate()
-            return
-        elif self._typing():
+        if self._typing() and not self._touch_keyboard.visible:
             self._show_touch_keyboard()
-        elif self._browser_is_open():
-            self.voice.activate()
-        elif self.current_view == "home":
-            self._open_sel()
+            return
+        self._global_select()
 
     def _touchpad_long_press(self):
-        self._go_home()
+        self._global_back()
 
     def _register_text_input(self, widget, submit_callback=None):
+        self._input_submit_map[str(widget)] = submit_callback
         widget.bind("<FocusIn>", lambda e, w=widget, cb=submit_callback: self._activate_text_input(w, cb), add="+")
         widget.bind("<Button-1>", lambda e, w=widget, cb=submit_callback: self.after(0, lambda: self._activate_text_input(w, cb)), add="+")
 
     def _activate_text_input(self, widget, submit_callback=None):
+        widget = self._resolve_text_input_widget(widget)
+        if widget is None:
+            self.log.debug("Text input activation ignored: no compatible widget")
+            return
+        self.log.debug("Activating text input: %s (%s)", widget, widget.winfo_class())
         self._active_input = widget
+        if submit_callback is None:
+            submit_callback = self._input_submit_map.get(str(widget))
         self._active_submit = submit_callback
+        try:
+            widget.focus_set()
+        except Exception:
+            pass
+        self._set_visual_focus(widget)
         self._show_touch_keyboard()
+
+    def _is_text_input_widget(self, widget):
+        if widget is None:
+            return False
+        try:
+            if not widget.winfo_exists():
+                return False
+        except Exception:
+            return False
+
+        if isinstance(widget, (ctk.CTkEntry, ctk.CTkTextbox, tk.Entry, tk.Text)):
+            return True
+
+        try:
+            return widget.winfo_class() in ("Entry", "Text", "TEntry", "TText", "Spinbox")
+        except Exception:
+            return False
+
+    def _resolve_text_input_widget(self, widget):
+        current = widget
+        depth = 0
+        while current is not None and depth < 8:
+            if self._is_text_input_widget(current):
+                return current
+            try:
+                current = current.master
+            except Exception:
+                current = None
+            depth += 1
+        return None
+
+    def _global_text_input_focus(self, e):
+        raw_widget = getattr(e, "widget", None)
+        self.log.debug("FocusIn received from widget: %s", raw_widget)
+        widget = self._resolve_text_input_widget(raw_widget)
+        if widget is not None:
+            self.log.debug("FocusIn detected text widget: %s (%s)", widget, widget.winfo_class())
+            self.after(0, lambda w=widget: self._activate_text_input(w))
+
+    def _global_text_input_click(self, e):
+        raw_widget = getattr(e, "widget", None)
+        self.log.debug("Button-1 received from widget: %s", raw_widget)
+        widget = self._resolve_text_input_widget(raw_widget)
+        if widget is not None:
+            self.log.debug("Button-1 detected text widget: %s (%s)", widget, widget.winfo_class())
+            self.after(0, lambda w=widget: self._activate_text_input(w))
 
     def _active_input_alive(self):
         if self._active_input is None:
@@ -1584,12 +2267,21 @@ class VAApp(ctk.CTk):
 
     def _show_touch_keyboard(self):
         if self.current_view == "home" or not self._active_input_alive():
+            self.log.debug("Touch keyboard show skipped (view=%s active=%s)",
+                           self.current_view, self._active_input_alive())
             return
+        self.log.debug("Showing touch keyboard for input: %s", self._active_input)
         self._touch_keyboard.show()
-        self._touch_keyboard.refresh()
 
     def _hide_touch_keyboard(self):
         self._touch_keyboard.hide()
+        if self._active_input_alive():
+            try:
+                self._active_input.focus_set()
+            except Exception:
+                self._focus_root()
+        else:
+            self._focus_root()
 
     def _handle_touch_key(self, token):
         if token == TouchKeyboard.TOK_SPACE:
@@ -1614,9 +2306,9 @@ class VAApp(ctk.CTk):
                 w.insert(w.index("insert"), text)
             else:
                 w.insert("insert", text)
-            w.focus_set()
             if self._touch_keyboard.visible:
                 self._touch_keyboard.refresh()
+            w.focus_set()
         except Exception as exc:
             self.toast.show(f"Typing failed: {exc}")
 
@@ -1633,9 +2325,9 @@ class VAApp(ctk.CTk):
                 idx = w.index("insert")
                 if idx != "1.0":
                     w.delete(f"{idx} -1c", idx)
-            w.focus_set()
             if self._touch_keyboard.visible:
                 self._touch_keyboard.refresh()
+            w.focus_set()
         except Exception:
             pass
 
@@ -1648,9 +2340,9 @@ class VAApp(ctk.CTk):
                 w.delete(0, "end")
             else:
                 w.delete("1.0", "end")
-            w.focus_set()
             if self._touch_keyboard.visible:
                 self._touch_keyboard.refresh()
+            w.focus_set()
         except Exception:
             pass
 
@@ -1676,328 +2368,141 @@ class VAApp(ctk.CTk):
         except Exception:
             return ""
 
+    def _focus_root(self):
+        try:
+            self.focus_set()
+            self.cv.focus_set()
+        except Exception:
+            pass
+
     def _generic(self, label):
         self._view(f"app:{label}", label,
                    f"{label} is not fully implemented yet.", placeholder=True)
 
-    # ═══════════════════════════════════════
-    #  Assistant
-    # ═══════════════════════════════════════
+    
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+    #  Gemini Assistant
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def show_assistant(self):
-        p = self._view("assistant", "Gemini",
-                        "AI assistant interface")
-
-        header = ctk.CTkFrame(
-            p,
-            fg_color="#061018",
-            corner_radius=18,
-            border_color="#00F5FF",
-            border_width=1
-        )
-        header.pack(fill="x", padx=12, pady=(10, 10))
-
-        top_strip = ctk.CTkFrame(header, fg_color="transparent")
-        top_strip.pack(fill="x", padx=14, pady=(12, 6))
-
-        ctk.CTkLabel(
-            top_strip,
-            text="◉ ARIES // GEMINI CORE",
-            font=("Consolas", 22, "bold"),
-            text_color=C
-        ).pack(side="left")
-
-        online = bool(getattr(self, "gemini_client", None))
-        status_text = "ONLINE" if online else "LOCAL MODE"
-        status_color = "#00F5FF" if online else "#FF9B3D"
-
-        self._assistant_status_chip = ctk.CTkLabel(
-            top_strip,
-            text=status_text,
-            font=("Consolas", 11, "bold"),
-            text_color="#021014",
-            fg_color=status_color,
-            corner_radius=12,
-            padx=12,
-            pady=5
-        )
-        self._assistant_status_chip.pack(side="right")
-
-        ctk.CTkLabel(
-            header,
-            text="Gemini 2.5 flash assistant • Aries glasses HUD • live reasoning interface",
-            font=("Consolas", 11),
-            text_color=TXTD
-        ).pack(anchor="w", padx=14, pady=(0, 4))
-
-        ctk.CTkLabel(
-            header,
-            text="VOICE [V]  •  TYPE  •  CLOUD RESPONSE",
-            font=("Consolas", 10, "bold"),
-            text_color="#5BC9D7"
-        ).pack(anchor="w", padx=14, pady=(0, 12))
-
-        status_row = ctk.CTkFrame(
-            p,
-            fg_color="#07131A",
-            corner_radius=14,
-            border_color="#123844",
-            border_width=1
-        )
-        status_row.pack(fill="x", padx=12, pady=(0, 10))
-
-        self._mic_status_lbl = ctk.CTkLabel(
-            status_row,
-            text="MIC: STANDBY",
-            font=("Consolas", 11, "bold"),
-            text_color="#7EE7F7"
-        )
-        self._mic_status_lbl.pack(side="left", padx=14, pady=10)
-
-        self._thinking_status_lbl = ctk.CTkLabel(
-            status_row,
-            text="CORE: IDLE",
-            font=("Consolas", 11, "bold"),
-            text_color="#7EE7F7"
-        )
-        self._thinking_status_lbl.pack(side="right", padx=14, pady=10)
-
-        chat_shell = ctk.CTkFrame(
-            p,
-            fg_color="#040B10",
-            corner_radius=18,
-            border_color="#103844",
-            border_width=1
-        )
-        chat_shell.pack(fill="both", expand=True, padx=12, pady=(0, 10))
-
-        chat_top = ctk.CTkFrame(chat_shell, fg_color="transparent")
-        chat_top.pack(fill="x", padx=14, pady=(12, 6))
-
-        ctk.CTkLabel(
-            chat_top,
-            text="LIVE SESSION",
-            font=("Consolas", 12, "bold"),
-            text_color=C
-        ).pack(side="left")
-
-        ctk.CTkLabel(
-            chat_top,
-            text="AR HUD FEED",
-            font=("Consolas", 10),
-            text_color=TXTD
-        ).pack(side="right")
+        p = self._view("assistant", "Assistant",
+                       "Cloud AI assistant powered by Gemini.")
 
         hist = ctk.CTkTextbox(
-            chat_shell,
-            font=("Consolas", 13),
-            wrap="word",
-            fg_color="#071018",
-            text_color=TXT,
-            corner_radius=12,
-            border_width=0
+            p, font=(FONT_MONO, 13), wrap="word",
+            fg_color="#0A1214", text_color=TXT
         )
-        hist.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-
-        hist.insert("end", "Aries ▸ Gemini link established.\n")
-        if getattr(self, "gemini_client", None):
-            hist.insert("end", "System ▸ Cloud reasoning online.\n")
-        else:
-            hist.insert("end", "System ▸ Local fallback active.\n")
-        hist.insert("end", "System ▸ Awaiting user input.\n\n")
+        hist.pack(side="top", fill="both", expand=True, padx=8, pady=(8, 4))
+        hist.insert("end", "Aries > Hi! How can I help?\n")
+        status = "Gemini READY" if getattr(self, "gemini_client", None) else "Gemini NOT CONFIGURED (using local fallback)"
+        hist.insert("end", f"  ({status})\n\n")
         hist.configure(state="disabled")
 
-        controls = ctk.CTkFrame(
-            p,
-            fg_color="#061018",
-            corner_radius=18,
-            border_color="#103844",
-            border_width=1
-        )
-        controls.pack(fill="x", padx=12, pady=(0, 10))
-
-        ctk.CTkLabel(
-            controls,
-            text="COMMAND INPUT",
-            font=("Consolas", 10, "bold"),
-            text_color=C
-        ).pack(anchor="w", padx=12, pady=(10, 4))
-
-        input_row = ctk.CTkFrame(controls, fg_color="transparent")
-        input_row.pack(fill="x", padx=10, pady=(0, 8))
+        bar = ctk.CTkFrame(p, fg_color="transparent")
+        bar.pack(side="bottom", fill="x", padx=8, pady=8)
 
         ent = ctk.CTkEntry(
-            input_row,
-            placeholder_text="Ask Gemini something...",
-            font=("Consolas", 13),
-            fg_color="#0A161D",
-            text_color=TXT,
-            border_color=C,
-            corner_radius=14,
-            height=42
+            bar, placeholder_text="Type a message ...",
+            font=(FONT_MONO, 13), fg_color=PNL,
+            text_color=TXT, border_color=CD
         )
-        ent.pack(side="left", fill="x", expand=True, padx=(0, 8))
-
-        thinking_lbl = ctk.CTkLabel(
-            controls,
-            text="",
-            font=("Consolas", 11),
-            text_color="#7EE7F7"
-        )
-        thinking_lbl.pack(anchor="w", padx=12, pady=(0, 8))
-
-        def set_thinking(text=""):
-            try:
-                if thinking_lbl.winfo_exists():
-                    thinking_lbl.configure(text=text)
-                if hasattr(self, "_thinking_status_lbl") and self._thinking_status_lbl.winfo_exists():
-                    self._thinking_status_lbl.configure(
-                        text=f"CORE: {text.upper()}" if text else "CORE: IDLE"
-                    )
-            except Exception:
-                pass
+        ent.pack(side="left", fill="x", expand=True, padx=(0, 6))
 
         def send(_=None):
             msg = ent.get().strip()
             if not msg:
                 return
-
             ent.delete(0, "end")
             hist.configure(state="normal")
-            hist.insert("end", f"You ▸ {msg}\n")
+            hist.insert("end", f"You > {msg}\n")
             hist.configure(state="disabled")
             hist.see("end")
-            set_thinking("Gemini is thinking...")
             self.update_idletasks()
+            _start_safe_thread(self._assistant_reply, "AssistantReply", self.log, msg, hist)
 
-            def _task():
-                reply = self._gemini_reply(msg)
-
-                def _update():
-                    try:
-                        if not hist.winfo_exists():
-                            return
-                        hist.configure(state="normal")
-                        hist.insert("end", f"Aries ▸ {reply}\n\n")
-                        hist.configure(state="disabled")
-                        hist.see("end")
-                        set_thinking("")
-                    except Exception:
-                        pass
-
-                self.after(0, _update)
-
-            threading.Thread(target=_task, daemon=True).start()
-
-        def clear_chat():
-            hist.configure(state="normal")
-            hist.delete("1.0", "end")
-            hist.insert("end", "Aries ▸ Conversation cleared.\n\n")
-            hist.configure(state="disabled")
-            set_thinking("")
-
-        def talk_now():
-            self.toast.show("Push-to-talk active")
-            self.voice.activate()
-
-        btn_row = ctk.CTkFrame(controls, fg_color="transparent")
-        btn_row.pack(fill="x", padx=10, pady=(0, 10))
-
-        self._btn(btn_row, "Send", send, True, 80)
-        self._btn(btn_row, "Talk", talk_now, False, 80)
-        self._btn(btn_row, "Clear", clear_chat, False, 80)
-
+        self._btn(bar, "Send", send, True, 72)
         ent.bind("<Return>", send)
         self._register_text_input(ent, send)
         ent.focus_set()
 
     def _assistant_reply(self, msg, hist):
         reply = self._gemini_reply(msg)
+
         def _update():
             try:
                 if not hist.winfo_exists():
                     return
                 hist.configure(state="normal")
-                hist.insert("end", f"Aries ▸ {reply}\n\n")
+                hist.insert("end", f"Aries > {reply}\n\n")
                 hist.configure(state="disabled")
                 hist.see("end")
             except Exception:
                 pass
+
         self.after(0, _update)
 
     def _gemini_reply(self, msg):
-        if not self.gemini_client:
+        if not getattr(self, "gemini_client", None):
             return self._local_reply(msg)
+
         try:
             resp = self.gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
+                model=getattr(self, "gemini_model", "gemini-2.0-flash"),
                 contents=(
                     "You are Aries, an AI inside AR smart glasses. "
-                    "Be concise, helpful, and practical.\n\n"
+                    "Be concise and helpful.\n\n"
                     f"User: {msg}"
                 ),
             )
+
             text = getattr(resp, "text", None)
             if text:
                 return text.strip()
-            return "[No response]"
-        except Exception as e:
-            return f"(Gemini error: {e})"
 
-    def _ollama_reply(self, msg):
-        if not ollama:
+            self.log.warning("Gemini returned no text; using local fallback")
             return self._local_reply(msg)
-        try:
-            msgs = [{"role": "system", "content":
-                     "You are Aries, an AI on AR smart glasses. Be concise."}]
-            msgs.extend(self.assistant_chat_history)
-            msgs.append({"role": "user", "content": msg})
-            resp = ollama.chat(model=self.assistant_model_name, messages=msgs)
-            ans = resp.get("message", {}).get("content", "").strip() or "[No response]"
-            self.assistant_chat_history.append({"role": "user", "content": msg})
-            self.assistant_chat_history.append({"role": "assistant", "content": ans})
-            return ans
         except Exception as e:
-            return f"(LLM error: {e})"
+            self.log.exception("Gemini request failed")
+            return f"{self._local_reply(msg)}\n[Gemini error: {e}]"
 
     def _local_reply(self, msg):
-        import re, math
-        expr = re.sub(r"[^0-9+\\-*/.()\s]", "", msg)
-        if expr and any(c.isdigit() for c in expr):
-            try:
-                return f"{eval(expr, {'__builtins__': {}}, {'math': math})}"
-            except Exception:
-                pass
-        low = msg.lower()
-        if "hello" in low or "hi" in low:
-            return "Hello! I'm Aries, running on-device."
-        if "time" in low:
-            return f"It's {_time_str()}."
-        return "Processed locally (MVP)."
+        import math
+        import re
 
-    # ═══════════════════════════════════════
+        try:
+            expr = re.sub(r"[^0-9+\*/.()\s-]", "", msg)
+            if expr and any(c.isdigit() for c in expr):
+                try:
+                    return f"{eval(expr, {'__builtins__': {}}, {'math': math})}"
+                except Exception:
+                    self.log.debug("Local calculator fallback failed for %r", expr)
+
+            low = msg.lower()
+            if "hello" in low or "hi" in low:
+                return "Hello! I'm Aries, running on-device."
+            if "time" in low:
+                return f"It's {_time_str()}."
+            return "Processed locally (MVP)."
+        except Exception:
+            self.log.exception("Local reply crashed")
+            return "Assistant fallback hit an internal error, but Aries is still running."
+
+
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Camera
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def show_camera(self):
         p = self._view("camera", "Camera",
-                        "Live preview · Capture saves to gallery")
+                        "Live preview Â· Capture saves to gallery")
 
-        self._cam_label = ctk.CTkLabel(p, text="Initializing …",
+        self._cam_label = ctk.CTkLabel(p, text="Initializing â€¦",
                                         font=(FONT, 13), text_color=TXTD)
         self._cam_label.pack(fill="both", expand=True)
 
-        ctk.CTkLabel(p, text="● LIVE", font=(FONT, 11, "bold"),
-                      text_color=RED).place(relx=.97, rely=.03, anchor="ne")
-
-        count = len([f for f in os.listdir(PHOTOS_DIR)
-                     if f.lower().endswith((".png", ".jpg", ".jpeg"))])
-        ctk.CTkLabel(p, text=f"📷 {count}", font=(FONT, 10),
-                      text_color=TXTD).place(relx=.03, rely=.03, anchor="nw")
-
         bb = ctk.CTkFrame(self._vf, fg_color="transparent")
         bb.pack(pady=(0, 8))
-        self._btn(bb, "📷 Capture", self._capture_photo, True)
+        self._btn(bb, "ðŸ“· Capture", self._capture_photo, True)
         self._btn(bb, "Restart", self._restart_cam)
         self._btn(bb, "Stop", self._stop_camera)
 
@@ -2007,11 +2512,37 @@ class VAApp(ctk.CTk):
         if cv2 is None:
             self._cam_msg("cv2 not installed")
             return
-        try:
-            self._cam_cap = cv2.VideoCapture(0)
-        except Exception:
-            self._cam_cap = None
+
+        if self._cam_running and self._cam_cap and self._cam_cap.isOpened():
+            self.log.debug("Camera already running on index %s", self._cam_source_index)
+            return
+
+        self._stop_camera(clear_message=False)
+        self._cam_last_frame = None
+        self._cam_image = None
+        self._cam_source_index = None
+
+        for idx in range(5):
+            cap = None
+            try:
+                cap = cv2.VideoCapture(idx)
+                if cap and cap.isOpened():
+                    self._cam_cap = cap
+                    self._cam_source_index = idx
+                    self.log.info("Camera opened on index %d", idx)
+                    break
+            except Exception:
+                self.log.exception("Camera initialization failed on index %d", idx)
+            finally:
+                if cap and cap is not self._cam_cap:
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+
         if not self._cam_cap or not self._cam_cap.isOpened():
+            self._cam_cap = None
+            self._cam_running = False
             self._cam_msg("No camera detected.")
             return
         self._cam_running = True
@@ -2026,12 +2557,13 @@ class VAApp(ctk.CTk):
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(frame).resize((800, 450))
                 self._cam_last_frame = img.copy()
-                tk_img = ImageTk.PhotoImage(img)
-                self._cam_tk = tk_img
+                self._cam_image = _make_ctk_image(img, (800, 450))
                 if self._cam_label:
-                    self._cam_label.configure(image=tk_img, text="")
+                    self._cam_label.configure(image=self._cam_image, text="")
+            else:
+                self.log.warning("Camera read failed on index %s", self._cam_source_index)
         except Exception:
-            pass
+            self.log.exception("Camera frame update failed")
         self._cam_after = self.after(33, self._cam_tick)
 
     def _capture_photo(self):
@@ -2042,12 +2574,12 @@ class VAApp(ctk.CTk):
         path = os.path.join(PHOTOS_DIR, f"aries_{ts}.png")
         try:
             self._cam_last_frame.save(path)
-            self.toast.show("📷 Photo saved!")
+            self.toast.show("ðŸ“· Photo saved!")
             self.status.append(f"Saved {os.path.basename(path)}")
         except Exception as e:
             self.toast.show(f"Save failed: {e}")
 
-    def _stop_camera(self):
+    def _stop_camera(self, clear_message=True):
         self._cam_running = False
         if self._cam_after:
             try:
@@ -2061,7 +2593,10 @@ class VAApp(ctk.CTk):
             except Exception:
                 pass
             self._cam_cap = None
-        self._cam_msg("Camera stopped.")
+        self._cam_source_index = None
+        self._cam_image = None
+        if clear_message:
+            self._cam_msg("Camera stopped.")
 
     def _restart_cam(self):
         self._stop_camera()
@@ -2074,9 +2609,9 @@ class VAApp(ctk.CTk):
             except Exception:
                 pass
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Photos
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def show_photos(self):
         p = self._view("photos", "Photos", "Camera captures & screenshots")
@@ -2115,9 +2650,9 @@ class VAApp(ctk.CTk):
             fpath = os.path.join(PHOTOS_DIR, fname)
             try:
                 thumb = Image.open(fpath).convert("RGBA").resize((130, 82), Image.LANCZOS)
-                tk_img = ImageTk.PhotoImage(thumb)
-                self._pv_refs.append(tk_img)
-                ctk.CTkButton(row, image=tk_img, text="", width=138, height=90,
+                ctk_img = _make_ctk_image(thumb, (130, 82))
+                self._pv_refs.append(ctk_img)
+                ctk.CTkButton(row, image=ctk_img, text="", width=138, height=90,
                                corner_radius=8, fg_color=PNLE, hover_color="#3A3A3C",
                                command=lambda fp=fpath, fn=fname: self._pv_show(fp, fn)
                                ).pack(side="left", padx=3)
@@ -2152,24 +2687,23 @@ class VAApp(ctk.CTk):
         try:
             img = Image.open(path).convert("RGBA")
             img.thumbnail((520, 280), Image.LANCZOS)
-            tk_img = ImageTk.PhotoImage(img)
-            self._pv_tk = tk_img
-            self._pv_label.configure(image=tk_img, text="")
+            self._pv_tk = _make_ctk_image(img, img.size)
+            self._pv_label.configure(image=self._pv_tk, text="")
             if name:
                 self._pv_name.configure(text=name)
         except Exception as e:
             self._pv_label.configure(image=None, text=f"Error: {e}")
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Browser
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  pywebview (subprocess) = full JS, Google/YouTube work
     #  tkinterweb fallback = no JS, DuckDuckGo HTML-lite
     #
-    #  Voice: "search X" / "browser search X" → opens with search
-    #         "close browser" / "exit" / "go home" → kills browser
-    #  Rotary: long press → kills browser + go home
-    # ═══════════════════════════════════════
+    #  Voice: "search X" / "browser search X" â†’ opens with search
+    #         "close browser" / "exit" / "go home" â†’ kills browser
+    #  Rotary: long press â†’ kills browser + go home
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     _browser_proc = None
 
@@ -2179,27 +2713,35 @@ class VAApp(ctk.CTk):
     def _close_browser(self):
         """Kill the pywebview subprocess if running."""
         if self._browser_is_open():
-            self._browser_proc.terminate()
+            try:
+                self._browser_proc.terminate()
+            except Exception:
+                self.log.exception("Browser terminate failed")
             self._browser_proc = None
             self.status.append("Browser closed")
             self.toast.show("Browser closed")
+        self._focus_root()
+
+    def _browser_launch(self, raw_text):
+        raw_text = (raw_text or "").strip()
+        if self._b_url is not None:
+            self._b_url.set(raw_text)
+        self._open_external_browser(self._to_google_url(raw_text))
+
+    def _browser_open_home(self):
+        self._browser_launch("")
 
     def show_browser(self, search_query=None):
-        if search_query:
-            url = "https://www.google.com/search?q=" + quote_plus(search_query)
-            self._open_external_browser(url)
-            return
-
         p = self._view("browser", "Browser")
 
         nav = ctk.CTkFrame(p, fg_color="transparent")
         nav.pack(fill="x", padx=10, pady=(14, 8))
 
-        self._b_url = ctk.StringVar(value="")
+        self._b_url = tk.StringVar(value=(search_query or "").strip())
         ent = ctk.CTkEntry(
             nav,
             textvariable=self._b_url,
-            placeholder_text="Search Google or enter URL…",
+            placeholder_text="Search Google or enter URL...",
             font=(FONT, 15),
             fg_color=PNL,
             text_color=TXT,
@@ -2207,16 +2749,13 @@ class VAApp(ctk.CTk):
             height=42,
         )
         ent.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self._browser_entry = ent
 
         def go(_=None):
-            raw = self._b_url.get().strip()
-            if not raw:
-                self._open_external_browser("https://www.google.com")
-                return
-            self._open_external_browser(self._to_google_url(raw))
+            self._browser_launch(self._b_url.get())
 
         self._btn(nav, "Open", go, True, 72)
-        self._btn(nav, "Home", lambda: self._open_external_browser("https://www.google.com"), w=72)
+        self._btn(nav, "Home", self._browser_open_home, w=72)
 
         card = ctk.CTkFrame(p, corner_radius=14, fg_color="#151518")
         card.pack(fill="both", expand=True, padx=10, pady=(6, 10))
@@ -2233,10 +2772,13 @@ class VAApp(ctk.CTk):
         ent.bind("<Return>", go)
         self._register_text_input(ent, go)
         self._activate_text_input(ent, go)
-        ent.focus_force()
+        self._focus_root()
         self.after(50, self._show_touch_keyboard)
+        if search_query:
+            self.after(100, go)
 
     def _open_external_browser(self, url):
+        url = self._to_google_url(url)
         try:
             import webview as _wv_check
             has_pywebview = True
@@ -2250,14 +2792,14 @@ class VAApp(ctk.CTk):
                           "pip install tkinterweb  (basic HTML)",
                           font=(FONT, 13), text_color=TXTD,
                           justify="center").place(relx=.5, rely=.5, anchor="center")
+            self._focus_root()
             return
 
         if self._browser_is_open():
-            self.toast.show("Full browser already open")
-            return
+            self._close_browser()
 
-        self.toast.show("Opening full browser…", 1500)
-        self.status.append("Browser → external full web")
+        self.toast.show("Opening full browser...", 1500)
+        self.status.append(f"Browser -> {url}")
         win_x = self.winfo_rootx()
         win_y = self.winfo_rooty()
         script = (
@@ -2278,7 +2820,8 @@ class VAApp(ctk.CTk):
                     self._browser_proc.wait()
                 self.after(0, lambda: self.status.append("Browser closed"))
                 self._browser_proc = None
-            threading.Thread(target=_watch, daemon=True).start()
+            _start_safe_thread(_watch, "BrowserWatch", self.log)
+            self.after(100, self._focus_root)
         except Exception as exc:
             self.toast.show(f"Browser failed: {exc}")
 
@@ -2294,18 +2837,19 @@ class VAApp(ctk.CTk):
         return "https://www.google.com/search?q=" + quote_plus(text)
 
     def _show_embedded_browser(self, start_url, external_url=None):
-        """Fallback embedded browser — no JavaScript."""
+        """Fallback embedded browser - no JavaScript."""
         p = self._view("browser", "Browser")
 
         nav = ctk.CTkFrame(p, fg_color="transparent")
         nav.pack(fill="x", padx=10, pady=(8, 4))
 
-        self._b_url = ctk.StringVar(value="")
+        self._b_url = tk.StringVar(value=start_url)
         ent = ctk.CTkEntry(nav, textvariable=self._b_url,
-                            placeholder_text="Search or enter URL…",
+                            placeholder_text="Search or enter URL...",
                             font=(FONT, 13), fg_color=PNL,
                             text_color=TXT, border_color="#3A3A3C")
         ent.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self._browser_entry = ent
 
         web = ctk.CTkFrame(p, corner_radius=8, fg_color="#1C1C1E")
         web.pack(fill="both", expand=True, padx=10, pady=(2, 10))
@@ -2320,11 +2864,12 @@ class VAApp(ctk.CTk):
             url = self._to_url_ddg(raw)
             self._b_url.set(raw)
             self._html.load_website(url)
+            self._focus_root()
 
         self._btn(nav, "Go", go, True, 56)
-        self._btn(nav, "◀", lambda: self._safe(self._html.go_back), w=38)
-        self._btn(nav, "▶", lambda: self._safe(self._html.go_forward), w=38)
-        self._btn(nav, "⟳", lambda: self._safe(self._html.reload), w=38)
+        self._btn(nav, "Back", lambda: self._safe(self._html.go_back), w=56)
+        self._btn(nav, "Next", lambda: self._safe(self._html.go_forward), w=56)
+        self._btn(nav, "Reload", lambda: self._safe(self._html.reload), w=60)
         if external_url:
             self._btn(nav, "Full", lambda u=external_url: self._open_external_browser(u), w=56)
         self._btn(nav, "Close", self._go_home, w=60)
@@ -2332,7 +2877,8 @@ class VAApp(ctk.CTk):
         self._html.load_website(start_url)
         ent.bind("<Return>", go)
         self._register_text_input(ent, go)
-        ent.focus_set()
+        self._activate_text_input(ent, go)
+        self._focus_root()
 
     @staticmethod
     def _to_url_ddg(text):
@@ -2353,8 +2899,8 @@ class VAApp(ctk.CTk):
         if not target:
             return
         url = self._to_direct_website_url(target)
-        self.status.append(f"Website → {target}")
-        self.toast.show(f"Opening {target}…", 1500)
+        self.status.append(f"Website â†’ {target}")
+        self.toast.show(f"Opening {target}â€¦", 1500)
         self._open_external_browser(url)
 
     @staticmethod
@@ -2400,9 +2946,9 @@ class VAApp(ctk.CTk):
             return text
         return "https://www.google.com/search?btnI=I&q=" + quote_plus(text)
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Translate
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def show_translate(self):
         p = self._view("translate", "Translate",
@@ -2428,7 +2974,7 @@ class VAApp(ctk.CTk):
         tgt = ctk.CTkTextbox(p, height=120, font=(FONT, 13),
                               fg_color="#1C1C1E", text_color=C)
         tgt.pack(fill="x", padx=10, pady=(4, 8))
-        tgt.insert("end", "Translation appears here …")
+        tgt.insert("end", "Translation appears here â€¦")
         tgt.configure(state="disabled")
 
         def go():
@@ -2453,14 +2999,14 @@ class VAApp(ctk.CTk):
                                         target=codes.get(lang, "en")).translate(text)
             except Exception as e:
                 return f"Error: {e}"
-        fb = {("Hello", "Japanese"): "こんにちは",
+        fb = {("Hello", "Japanese"): "ã“ã‚“ã«ã¡ã¯",
               ("Hello", "Spanish"): "Hola", ("Hello", "French"): "Bonjour"}
         hit = fb.get((text.split(",")[0].strip(), lang))
         return f"{hit}  (demo)" if hit else f"{text}\n\n[deep-translator not installed]"
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Settings
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def show_settings(self):
         p = self._view("settings", "Settings", "Device + app configuration")
@@ -2492,7 +3038,7 @@ class VAApp(ctk.CTk):
         ctk.CTkFrame(p, fg_color="#2C2C2E", height=1).pack(fill="x", padx=20, pady=(12, 6))
 
         mic_state = "Ready" if self.voice.available else "Not installed"
-        ctk.CTkLabel(p, text=f"Microphone — {mic_state}",
+        ctk.CTkLabel(p, text=f"Microphone â€” {mic_state}",
                       font=(FONT, 14, "bold"),
                       text_color=TXT).pack(anchor="w", padx=20)
 
@@ -2506,9 +3052,9 @@ class VAApp(ctk.CTk):
         else:
             mic_box.insert("end", f"{len(mics)} device(s):\n")
             for i, name in mics:
-                tag = " ◀ ACTIVE" if i == self.voice.mic_index else ""
+                tag = " < ACTIVE" if i == self.voice.mic_index else ""
                 if self.voice.mic_index is None and i == 0:
-                    tag = " ◀ DEFAULT"
+                    tag = " < DEFAULT"
                 mic_box.insert("end", f"  [{i}] {name}{tag}\n")
         mic_box.configure(state="disabled")
 
@@ -2530,7 +3076,7 @@ class VAApp(ctk.CTk):
                     idx = int(iv.get())
                     self.voice.mic_index = idx
                     _save_config({"mic_index": idx})
-                    self.toast.show(f"Mic → device [{idx}] (saved)")
+                    self.toast.show(f"Mic â†’ device [{idx}] (saved)")
                 except ValueError:
                     self.toast.show("Invalid number")
 
@@ -2540,7 +3086,7 @@ class VAApp(ctk.CTk):
             test_lbl.pack(anchor="w", padx=20)
 
             def test_mic():
-                test_lbl.configure(text="Recording 3s …")
+                test_lbl.configure(text="Recording 3s â€¦")
                 self.update_idletasks()
                 def _t():
                     msg = ""
@@ -2555,10 +3101,10 @@ class VAApp(ctk.CTk):
                         shorts = struct.unpack(f"<{len(raw)//2}h", raw)
                         rms = (sum(x*x for x in shorts) / len(shorts)) ** 0.5
                         th = VoiceController.ENERGY_THRESHOLD
-                        msg = (f"✓ RMS: {rms:.0f} (threshold: {th}) — "
-                               f"{'GOOD' if rms > th else '⚠ TOO QUIET'}")
+                        msg = (f"âœ“ RMS: {rms:.0f} (threshold: {th}) â€” "
+                               f"{'GOOD' if rms > th else 'âš  TOO QUIET'}")
                     except Exception as e:
-                        msg = f"✗ {e}"
+                        msg = f"âœ— {e}"
                     def _update_lbl():
                         try:
                             if test_lbl.winfo_exists():
@@ -2566,14 +3112,14 @@ class VAApp(ctk.CTk):
                         except Exception:
                             pass
                     self.after(0, _update_lbl)
-                threading.Thread(target=_t, daemon=True).start()
+                _start_safe_thread(_t, "MicTest", self.log)
 
-            self._btn_c(p, "🎙 Test Mic (3s)", test_mic, True)
+            self._btn_c(p, "ðŸŽ™ Test Mic (3s)", test_mic, True)
 
         # Rotary section
         if self.rotary.available:
             ctk.CTkFrame(p, fg_color="#2C2C2E", height=1).pack(fill="x", padx=20, pady=(8, 6))
-            ctk.CTkLabel(p, text="Rotary Encoder — Connected",
+            ctk.CTkLabel(p, text="Rotary Encoder â€” Connected",
                           font=(FONT, 12), text_color=GRN
                           ).pack(anchor="w", padx=20)
 
@@ -2583,9 +3129,9 @@ class VAApp(ctk.CTk):
         self.dark_mode = bool(sw.get())
         ctk.set_appearance_mode("dark" if self.dark_mode else "light")
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  System Info
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def show_sysinfo(self):
         p = self._view("sysinfo", "System Info", "Device diagnostics")
@@ -2598,11 +3144,10 @@ class VAApp(ctk.CTk):
             f"Python:   {sys.version.split()[0]}",
             f"Display:  {WIDTH}x{HEIGHT} @ {TARGET_FPS}fps",
             f"Pi mode:  {IS_PI}",
-            f"OpenCV:   {'✓' if cv2 else '✗'}",
-            f"Ollama:   {'✓' if ollama else '✗'}",
-            f"STT:      {'✓' if sr else '✗'}",
-            f"GPIO:     {'✓' if GPIO else '✗'}",
-            f"Rotary:   {'✓ active' if self.rotary.available else '✗ inactive'}",
+            f"OpenCV:   {'âœ“' if cv2 else 'âœ—'}",
+            f"STT:      {'âœ“' if sr else 'âœ—'}",
+            f"GPIO:     {'âœ“' if GPIO else 'âœ—'}",
+            f"Rotary:   {'âœ“ active' if self.rotary.available else 'âœ— inactive'}",
             f"Voice:    {self.voice.state.value}",
             f"Photos:   {len(os.listdir(PHOTOS_DIR))} files",
         ]
@@ -2613,9 +3158,9 @@ class VAApp(ctk.CTk):
         box.insert("end", "\n".join(info))
         box.configure(state="disabled")
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Power
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def show_power(self):
         p = self._view("power", "Power")
@@ -2645,9 +3190,9 @@ class VAApp(ctk.CTk):
                        font=(FONT, 13), text_color=TXTD,
                        command=self._go_home).pack(pady=16)
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Bluetooth
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def show_bluetooth(self):
         p = self._view("bluetooth", "Bluetooth", "Nearby device scan (simulated)")
@@ -2655,42 +3200,42 @@ class VAApp(ctk.CTk):
         box = ctk.CTkTextbox(p, font=(FONT, 13),
                               fg_color="#1C1C1E", text_color=TXT)
         box.pack(fill="both", expand=True, padx=8, pady=8)
-        box.insert("end", "Press Scan to search …\n")
+        box.insert("end", "Press Scan to search â€¦\n")
         box.configure(state="disabled")
 
         def scan():
             import random
-            devs = ["Phone – Pixel 9 Pro", "Laptop – MacBook Pro",
-                    "Earbuds – AirPods Pro", "Watch – Galaxy Watch",
-                    "Speaker – JBL Flip 6", "Controller – PS5 DualSense"]
+            devs = ["Phone â€“ Pixel 9 Pro", "Laptop â€“ MacBook Pro",
+                    "Earbuds â€“ AirPods Pro", "Watch â€“ Galaxy Watch",
+                    "Speaker â€“ JBL Flip 6", "Controller â€“ PS5 DualSense"]
             random.shuffle(devs)
             now = datetime.now().strftime("%H:%M:%S")
             box.configure(state="normal")
             box.insert("end", f"\n[{now}] Found {len(devs)} devices:\n")
             for d in devs:
-                box.insert("end", f"  ▸ {d}\n")
+                box.insert("end", f"  â–¸ {d}\n")
             box.configure(state="disabled")
             box.see("end")
 
         self._btn_c(p, "Scan", scan, True)
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Track / GPS
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def show_track(self):
         p = self._view("track", "Track / Location",
-                        "IP geolocation demo · real device uses GPS")
+                        "IP geolocation demo Â· real device uses GPS")
 
         box = ctk.CTkTextbox(p, font=(FONT, 13),
                               fg_color="#1C1C1E", text_color=TXT)
         box.pack(fill="both", expand=True, padx=8, pady=8)
-        box.insert("end", "Press Refresh to locate …\n")
+        box.insert("end", "Press Refresh to locate â€¦\n")
         box.configure(state="disabled")
 
         def go():
             box.configure(state="normal")
-            box.insert("end", "\nLocating …\n")
+            box.insert("end", "\nLocating â€¦\n")
             box.configure(state="disabled")
             self.update_idletasks()
             def _loc():
@@ -2706,7 +3251,7 @@ class VAApp(ctk.CTk):
                     box.see("end")
                 except Exception:
                     pass
-            threading.Thread(target=_loc, daemon=True).start()
+            _start_safe_thread(_loc, "IPLocation", self.log)
 
         self._btn_c(p, "Refresh", go, True)
 
@@ -2720,13 +3265,13 @@ class VAApp(ctk.CTk):
             d = r.json()
             return (f"  {d.get('city','?')}, {d.get('region','?')}, "
                     f"{d.get('country_name','?')}\n"
-                    f"  Lat {d.get('latitude','?')}  ·  Lon {d.get('longitude','?')}")
+                    f"  Lat {d.get('latitude','?')}  Â·  Lon {d.get('longitude','?')}")
         except Exception as e:
             return f"Failed: {e}"
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Music
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def show_music(self):
         p = self._view("music", "Music")
@@ -2739,7 +3284,7 @@ class VAApp(ctk.CTk):
 
         row = ctk.CTkFrame(p, fg_color="transparent")
         row.pack(pady=8)
-        for t, sym in [("Prev", "⏮"), ("Play", "▶"), ("Next", "⏭")]:
+        for t, sym in [("Prev", "â®"), ("Play", ">"), ("Next", "â­")]:
             ctk.CTkButton(row, text=sym, width=56, height=56, corner_radius=28,
                            fg_color=PNLE, hover_color="#3A3A3C",
                            text_color=TXT, font=(FONT, 18),
@@ -2753,9 +3298,9 @@ class VAApp(ctk.CTk):
                              button_hover_color=TXTD, fg_color=PNLE)
         vol.set(70); vol.pack(fill="x", padx=48)
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Shared helpers
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _btn(self, parent, text, cmd, primary=False, w=None):
         kw = dict(text=text, command=cmd, corner_radius=20,
@@ -2782,9 +3327,9 @@ class VAApp(ctk.CTk):
         except Exception:
             pass
 
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     #  Main loop
-    # ═══════════════════════════════════════
+    # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
     def _tick(self):
         now = time.perf_counter()
@@ -2798,7 +3343,7 @@ class VAApp(ctk.CTk):
         if self._timer_running:
             elapsed = now - self._timer_start
             m, s = divmod(int(elapsed), 60)
-            self.cv.itemconfigure(self._timer_id, text=f"⏱ {m:02d}:{s:02d}")
+            self.cv.itemconfigure(self._timer_id, text=f"â± {m:02d}:{s:02d}")
 
         self.after(max(1, int(1000 / TARGET_FPS)), self._tick)
 
@@ -2807,3 +3352,11 @@ if __name__ == "__main__":
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("dark-blue")
     VAApp().mainloop()
+
+
+
+
+
+
+
+
