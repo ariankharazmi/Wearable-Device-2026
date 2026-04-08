@@ -768,7 +768,7 @@ class SeesawRotaryController:
     LONG_PRESS_SEC = 0.9
 
     def __init__(self, on_rotate=None, on_click=None, on_long_press=None,
-                 i2c_addr=0x36, button_pin=24):
+                 i2c_addr=0x49, button_pin=24):
         self.log = logging.getLogger("RotaryI2C")
         self._on_rotate = on_rotate
         self._on_click = on_click
