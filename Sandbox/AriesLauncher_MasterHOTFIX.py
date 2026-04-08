@@ -83,9 +83,12 @@ except Exception:
     seesaw_digitalio = None
 
 try:
-    from adafruit_cirque_pinnacle import PinnacleSPI
+    from circuitpython_cirque_pinnacle import PinnacleSPI
 except Exception:
-    PinnacleSPI = None
+    try:
+        from adafruit_cirque_pinnacle import PinnacleSPI
+    except Exception:
+        PinnacleSPI = None
 
 try:
     from digitalio import DigitalInOut
