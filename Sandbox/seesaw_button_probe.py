@@ -1,48 +1,49 @@
 import time
 import board
-import busio
-from adafruit_seesaw import seesaw, digitalio
+from adafruit_seesaw import digitalio, rotaryio, seesaw
 
-ADDR = 0x49
+i2c = board.I2C()
+ss = seesaw.Seesaw(i2c, addr=0x49)
 
-# Narrowed to likely candidates first.
-PINS = [5, 15, 16, 24]
+product = (ss.get_version() >> 16) & 0xFFFF
+print("Found product", product)
+if product != 5740:
+    print("Wrong firmware loaded? Expected 5740")
 
-i2c = busio.I2C(board.SCL, board.SDA)
-ss = seesaw.Seesaw(i2c, addr=ADDR)
+for pin in (1, 2, 3, 4, 5):
+    ss.pin_mode(pin, ss.INPUT_PULLUP)
 
-buttons = {}
-for pin in PINS:
-    try:
-        btn = digitalio.DigitalIO(ss, pin)
-        btn.switch_to_input(pull=True)
-        buttons[pin] = btn
-    except Exception as exc:
-        print(f"pin {pin}: unavailable ({exc})")
+select_btn = digitalio.DigitalIO(ss, 1)
+up_btn = digitalio.DigitalIO(ss, 2)
+left_btn = digitalio.DigitalIO(ss, 3)
+down_btn = digitalio.DigitalIO(ss, 4)
+right_btn = digitalio.DigitalIO(ss, 5)
 
-print("Watching pins:", sorted(buttons.keys()))
-print("Press one button at a time: center, up, down, left, right.")
-print("Press Ctrl+C to stop.\n")
+encoder = rotaryio.IncrementalEncoder(ss)
+last_pos = encoder.position
+last = {
+    "select": select_btn.value,
+    "up": up_btn.value,
+    "left": left_btn.value,
+    "down": down_btn.value,
+    "right": right_btn.value,
+}
 
-last = {pin: bool(btn.value) for pin, btn in buttons.items()}
-last_change = {pin: 0.0 for pin in buttons}
+while True:
+    pos = encoder.position
+    if pos != last_pos:
+        print("Position:", pos)
+        last_pos = pos
 
-try:
-    while True:
-        now = time.perf_counter()
-        for pin, btn in buttons.items():
-            try:
-                val = bool(btn.value)
-            except Exception:
-                continue
-
-            # Simple debounce so chatter is easier to read.
-            if val != last[pin] and (now - last_change[pin]) > 0.12:
-                state = "HIGH" if val else "LOW"
-                print(f"{time.strftime('%H:%M:%S')}  pin {pin} -> {state}")
-                last[pin] = val
-                last_change[pin] = now
-
-        time.sleep(0.10)
-except KeyboardInterrupt:
-    print("\nStopped.")
+    current = {
+        "select": select_btn.value,
+        "up": up_btn.value,
+        "left": left_btn.value,
+        "down": down_btn.value,
+        "right": right_btn.value,
+    }
+    for name, val in current.items():
+        if val != last[name]:
+            print(name, "released" if val else "pressed")
+            last[name] = val
+    time.sleep(0.05)
