@@ -9,6 +9,7 @@ import logging
 import subprocess
 import tkinter as tk
 from datetime import datetime
+import fcntl
 from queue import Empty, Queue
 from urllib.parse import quote_plus
 
