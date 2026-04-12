@@ -13,6 +13,11 @@ import fcntl
 from queue import Empty, Queue
 from urllib.parse import quote_plus
 
+try:
+    import spidev
+except Exception:
+    spidev = None
+
 import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageFilter, ImageGrab
 try:
