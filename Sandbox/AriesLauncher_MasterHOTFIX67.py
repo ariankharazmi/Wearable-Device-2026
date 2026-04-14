@@ -163,7 +163,7 @@ IS_PI = _is_embedded_device()
 
 if IS_PI:
     WIDTH, HEIGHT = 640, 400
-    TARGET_FPS = 30
+    TARGET_FPS = 60
     BASE_ICON = 92
     SPACING = 108
     FLOW_LAMBDA = 18.0
