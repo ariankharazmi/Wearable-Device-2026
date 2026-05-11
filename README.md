@@ -1,11 +1,9 @@
-# Vision Aries - Wearable Device 2026
-
-## Wearable Summary:
+## What is Vision Aries?
 Compute: Radxa Zero 2 Pro
 
-Display: High-resolution Sony display 
+Display: Sony ECX336C OLED micro-display
 
-OS: Debian
+OS: Debian/Raspberry Pi OS
 
 UI & Main Processing Stack: Custom UI & Processing Stacks built w/ Python
 
@@ -14,18 +12,17 @@ Purpose: UCinci Senior Design Capstone 2026 & UC IT Expo 2026
 Strengths: Handsfree navigation, new medium for information delivery, and automation of tasks
 
 ## Summary
-Wearable Device 2026 serves as tool for improving workplace and occupational outcomes. Automate a task via voice, capture your POV, or get mobile notifications without taking out your phone or PC, and much more.
+Vision Aries serves as tool for improving workplace and occupational outcomes. Automate a task via voice, capture your POV, or get mobile notifications without taking out your phone or PC, and much more.
 
 ## Phase 1 Hardware
-* Radxa Zero 2 Pro
-* Sony micro-display
-* Cirque TouchPad & Voice Controls for navigation & volume
-* Camera Module
+* Radxa Zero 2 Pro (Raspberry Pi 5 4GB for demo-ready version)
+* Sony ECX336C OLED Micro-display
+* Rotary Knob, TouchPad, & Microphone Controls for navigation & volume
+* ArduCam 16MP Camera & Microphone
+* 10000 mAh battery
 
 ## Phase 2 Software
 * WiFi & Bluetooth capabilities
-* Phone Notification Synchronization
-* API Plugin App
 * Voice Control
 * Photo & Video Capture
 * Web Browser
@@ -40,15 +37,4 @@ Wearable Device 2026 serves as tool for improving workplace and occupational out
 * Oct 2025 - Core software suite tested on hardware
 * Nov 2025 - Early MVP Prototype developed, demoed publicly
 * Dec 2025 - March 2026 - Building Dev Kit, Refining final software stack
-
-## Capabilities
-Wearable Device 2026 can receive mobile phone notifications, serve information (such as alerts, schematics), and capture photos & video. Wearable Device 2026 can also utilize bluetooth features -- like file transfer, connecting to accessories, and more. Handsfree use, navigation, and automation means that users no longer need to reach into your pocket, open up a computer, or check their smartwatch for information. It all delivers via the high-resolution Sony Display that Wearable Device 2026 is equipped with. This will serve occupational uses well, such as factory workers seeing a schematic right in front of them, disaster responders getting critical alerts in their field-of-view, or even researchers using the device for education. Wearable Device 2026 is a purpose-driven device built to serve us, not serve us gimmicks. Wearable Device 2026 aims to be a truly useful device, and the best student-built wearable, all built with off-the-shelf parts. Wearable Device 2026 is being actively developed for University of Cincinnati's Senior Design Capstone 2026 round, and the UC IT Expo 2026.
-
-## Citation
-None...
-
-## Wearable Device 2026 Team - UC Senior Design Capstone 2026
-Arian Kharazmi, Taka Kiuchi, Leonardo Mangialardo
-
-## Acknowledgements
-Thank you to the University of Cincinnati for allowing us to work on a hardware-software project. We could not do this without your support.
+* March 2026 - April 2026 - Finished Dev Kit, presented and demoed at UC IT Expo 2026, won major category "IoT, Wearables, and Logistics"
